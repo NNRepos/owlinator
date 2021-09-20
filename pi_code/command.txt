@@ -1,0 +1,1 @@
+python3 cv.py -p MobileNetSSD_deploy.prototxt -m MobileNetSSD_deploy.caffemodel
