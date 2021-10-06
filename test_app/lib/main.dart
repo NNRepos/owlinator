@@ -1,11 +1,17 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'data/command.dart';
+import 'data/command_doa.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   runApp(const MyApp());
+
+
+
 }
 
 class MyApp extends StatelessWidget {
@@ -111,7 +117,7 @@ class _MyHomePageState extends State<MyHomePage> {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const SecondRoute("name", "company", 42)),
+                  MaterialPageRoute(builder: (context) => const SecondRoute("name", "company", 50)),
                 );
               },
             ),
@@ -137,17 +143,22 @@ class SecondRoute extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     CollectionReference users = FirebaseFirestore.instance.collection('users');
+    final commandDao = CommandDao();
 
-    Future<void> addUser() {
+    Future<void> addUser() async {
       // Call the user's CollectionReference to add a new user
-      return users
-          .add({
-            'full_name': fullName, // John Doe
-            'company': company, // Stokes and Sons
-            'age': age // 42
-          })
-          .then((value) => print("User Added"))
-          .catchError((error) => print("Failed to add user: $error"));
+      // return users
+      //     .add({
+      //       'full_name': fullName, // John Doe
+      //       'company': company, // Stokes and Sons
+      //       'age': age // 42
+      //     })
+      //     .then((value) => users.get().then((val) => print(val)))
+      //     .catchError((error) => print("Failed to add user: $error"));
+
+      final command = Command('device1', DateTime.now(), 'command1', false);
+      commandDao.sendCommand(command);
+      print("pressed");
     }
 
     return Scaffold(
