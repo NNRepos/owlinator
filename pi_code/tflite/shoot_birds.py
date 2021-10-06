@@ -1,13 +1,17 @@
 import argparse
 import os
 import time
-from datetime import datetime
+from pathlib import Path
 from threading import Thread
-from typing import List
+from typing import List, Union
 
 import cv2
+import firebase_admin
 import numpy as np
-from firebase_admin import messaging
+from firebase_admin import credentials, db
+from playsound import playsound
+
+FIREBASE_KEY_JSON = "firebase_key.json"
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -15,7 +19,7 @@ except ImportError:
     from tensorflow.lite.python.interpreter import Interpreter
 
 MAX_FPS = 30
-BIRD_CONFIDENCE = 0.7
+BIRD_CONFIDENCE = 0.5
 BIRD_LABEL = "bird"
 
 
@@ -62,13 +66,30 @@ class VideoStream:
         self.stopped = True
 
 
+class SoundLibrary:
+    SOUNDS_PATH = Path(__file__).parent / "sounds"
+
+    def __init__(self):
+        self.owl_call = self.SOUNDS_PATH / "owl_call.mp3"
+        self.owl_hoot = self.SOUNDS_PATH / "owl_hoot.mp3"
+        self.owl_screech = self.SOUNDS_PATH / "owl_screech.mp3"
+
+
 class BigScaryOwl:
+    RUN_NETWORK = False
+
     def __init__(self):
         args = self.get_input_arguments()
         model_name = args.modeldir
         graph_name = args.graph
         labelmap_name = args.labels
         cwd_path = os.getcwd()
+
+        self.sound_thread: Union[None, Thread] = None
+
+        self.sounds = SoundLibrary()
+        self.loop_ticks = 0
+        self.frame_count = 0
 
         self.min_confidence_threshold = float(args.threshold)
         self.im_width, self.im_height = [int(val) for val in args.resolution.split('x')]
@@ -101,11 +122,11 @@ class BigScaryOwl:
         # Initialize video stream
         self.videostream = VideoStream(resolution=(self.im_width, self.im_height)).start()
 
-        # firebase stuff
-        # TODO@niv
-        self.firebase_registration_token = 'YOUR_REGISTRATION_TOKEN'
-
-        # TODO@niv: create TF network class
+        # initalize firebase app
+        cred = credentials.Certificate(FIREBASE_KEY_JSON)
+        app_data = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/"}
+        firebase_admin.initialize_app(cred, app_data)
+        self.ref = db.reference("/")
 
     def parse_labels(self) -> List[str]:
         # Load the label map
@@ -135,24 +156,13 @@ class BigScaryOwl:
     def run_video_loop(self):
         print("press q (while focused on video) to quit")
         while True:
-            # Start timer (for calculating frame rate)
-            t1 = cv2.getTickCount()
+            self._update_ticks()
 
             frame, input_data = self.prepare_frame_for_network(self.videostream)
-
             self.run_image_through_network(input_data)
             self.analyze_detections(frame)
-
-            # Draw framerate in corner of frame
-            cv2.putText(frame, 'FPS: {0:.2f}'.format(self.frame_rate_calc), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
-
-            # All the results have been drawn on the frame, so it's time to display it.
-            cv2.imshow('Object detector', frame)
-
-            # Calculate framerate
-            t2 = cv2.getTickCount()
-            time1 = (t2 - t1) / self.freq
-            self.frame_rate_calc = 1 / time1
+            self.show_frame(frame)
+            self.check_realtime_triggers()
 
             # Press 'q' to quit
             if cv2.waitKey(1) == ord('q'):
@@ -161,6 +171,22 @@ class BigScaryOwl:
         # Clean up
         cv2.destroyAllWindows()
         self.videostream.stop()
+
+    def _update_ticks(self):
+        if self.loop_ticks > 0:
+            # Calculate framerate
+            t1 = self.loop_ticks
+            t2 = cv2.getTickCount()
+            time_delta = (t2 - t1) / self.freq
+            self.frame_rate_calc = 1 / time_delta
+            self.frame_count += 1
+        self.loop_ticks = cv2.getTickCount()
+
+    def show_frame(self, frame):
+        # Draw framerate in corner of frame
+        cv2.putText(frame, 'FPS: {0:.2f}'.format(self.frame_rate_calc), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
+        # All the results have been drawn on the frame, so it's time to display it.
+        cv2.imshow('Object detector', frame)
 
     def prepare_frame_for_network(self, videostream):
         # Grab frame from video stream
@@ -179,27 +205,45 @@ class BigScaryOwl:
         """
         note: tensorflow_lite is optimized for ARM! super slow on windows.
         """
-        # Perform the actual detection by running the model with the image as input
-        self.interpreter.set_tensor(self.network_input[0]['index'], input_data)
-        self.interpreter.invoke()
+        if self.RUN_NETWORK:
+            # Perform the actual detection by running the model with the image as input
+            self.interpreter.set_tensor(self.network_input[0]['index'], input_data)
+            self.interpreter.invoke()
 
     def analyze_detections(self, frame):
-        # Retrieve detection results
-        boxes = self.interpreter.get_tensor(self.network_output[0]['index'])[0]  # Bounding box coordinates of detected objects
-        classes = self.interpreter.get_tensor(self.network_output[1]['index'])[0]  # Class index of detected objects
-        scores = self.interpreter.get_tensor(self.network_output[2]['index'])[0]  # Confidence of detected objects
-        # Loop over all detections and draw detection box if confidence is above minimum threshold
-        for detection_id in range(len(scores)):
-            curr_confidence = scores[detection_id]
-            curr_label = self.labels[int(classes[detection_id])]
+        if self.RUN_NETWORK:
+            # Retrieve detection results
+            boxes = self.interpreter.get_tensor(self.network_output[0]['index'])[0]  # Bounding box coordinates of detected objects
+            classes = self.interpreter.get_tensor(self.network_output[1]['index'])[0]  # Class index of detected objects
+            scores = self.interpreter.get_tensor(self.network_output[2]['index'])[0]  # Confidence of detected objects
+            # Loop over all detections and draw detection box if confidence is above minimum threshold
+            for detection_id in range(len(scores)):
+                curr_confidence = scores[detection_id]
+                curr_label = self.labels[int(classes[detection_id])]
 
-            if (curr_confidence > self.min_confidence_threshold) and (curr_confidence <= 1.0):
-                self.draw_detection(boxes, curr_label, frame, detection_id, scores)
+                if (curr_confidence > self.min_confidence_threshold) and (curr_confidence <= 1.0):
+                    self.draw_detection(boxes, curr_label, frame, detection_id, scores)
 
-            if curr_confidence > BIRD_CONFIDENCE and curr_label == BIRD_LABEL:
-                print(f"bird found with confidence {curr_confidence}")
-                self.send_data_firebase(z, z)
+                if curr_confidence > BIRD_CONFIDENCE and curr_label == BIRD_LABEL:
+                    self._bird_detected_action()
+                    # print(f"bird found with confidence {curr_confidence}")
+                    # self.send_data_firebase(curr_label, curr_confidence)
+        else:
+            if not self.frame_count % 100:
+                self._bird_detected_action()
 
+    def _bird_detected_action(self):
+        if ((self.sound_thread is None) or
+                (self.sound_thread is not None and not self.sound_thread.is_alive())):
+            self.sound_thread = Thread(target=self._play_sound_action, args=[self.sounds.owl_hoot])
+            self.sound_thread.start()
+            print(f"frames={self.frame_count}")
+
+    @staticmethod
+    def _play_sound_action(sound_to_play):
+        hoot_thread = Thread(target=playsound, args=[sound_to_play])
+        hoot_thread.start()
+        hoot_thread.join()
 
     def draw_detection(self, boxes, object_name, frame, i, scores):
         # Get bounding box coordinates and draw box
@@ -220,17 +264,20 @@ class BigScaryOwl:
         cv2.rectangle(frame, (xmin, label_ymin - label_size[1] - 10), (xmin + label_size[0], label_ymin + base_line - 10), (255, 255, 255), cv2.FILLED)
         cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)  # Draw label text
 
-    def send_data_firebase(self, label, confidence):
-        message = messaging.Message(
-            data={
-                'label': label,
-                'confidence':confidence,
-                'time': datetime.now(),
-            },
-            token=self.firebase_registration_token)
-
-        response = messaging.send(message)
-        print('Successfully sent message:', response)
+    # def send_data_firebase(self, label, confidence):
+    #     message = messaging.Message(
+    #         data={
+    #             'label': label,
+    #             'confidence': confidence,
+    #             'time': datetime.now(),
+    #         },
+    #         token=self.firebase_registration_token)
+    #
+    #     response = messaging.send(message)
+    #     print('Successfully sent message:', response)
+    def check_realtime_triggers(self):
+        # self.ref.set()
+        pass
 
 
 if __name__ == "__main__":
