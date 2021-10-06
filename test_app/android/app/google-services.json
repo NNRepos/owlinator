@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "276167750137",
+    "project_id": "iot-project-f75da",
+    "storage_bucket": "iot-project-f75da.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:276167750137:android:d3e3f5056c7b23d0bfcd28",
+        "android_client_info": {
+          "package_name": "com.example.test_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "276167750137-bg35ar7uvjj21kersutagi1h76r6k3fj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDcgj7j_OETV08ZhqAuOa1M1FoVgcvdSQU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "276167750137-bg35ar7uvjj21kersutagi1h76r6k3fj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "276167750137-lsd8gcehuqnd1vdlibqh5rp2igff51nh.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.ourapp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
