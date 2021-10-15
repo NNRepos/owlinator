@@ -1,6 +1,5 @@
 import argparse
 import random
-import time
 from pathlib import Path
 from threading import Thread
 from typing import List
@@ -12,11 +11,14 @@ import pygame
 from firebase_admin import credentials, db
 from pygame import mixer, event
 
-try:
-    print("setting up tensorflow, this takes ~10 seconds...")
-    from tflite_runtime.interpreter import Interpreter
-except ImportError:
-    from tensorflow.lite.python.interpreter import Interpreter
+USE_NETWORK = False
+
+if USE_NETWORK:
+    try:
+        print("setting up tensorflow, this takes ~5 seconds...")
+        from tflite_runtime.interpreter import Interpreter
+    except ImportError:
+        from tensorflow.lite.python.interpreter import Interpreter
 
 
 class VideoStream:
@@ -24,6 +26,7 @@ class VideoStream:
 
     def __init__(self, resolution=(640, 480)):
         # Initialize the PiCamera and the camera image stream
+        print("setting up cv2 video, this takes ~5 seconds...")
         self.stream = cv2.VideoCapture(0)
         self.stream.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.stream.set(3, resolution[0])
@@ -38,7 +41,6 @@ class VideoStream:
     def start(self):
         # Start the thread that reads frames from the video stream
         Thread(target=self.update, args=()).start()
-        time.sleep(1)
         return self
 
     def update(self):
@@ -144,16 +146,24 @@ class BirdDetectionNetwork:
 
 
 class BigScaryOwl:
-    RUN_NETWORK = False
+    # detections
     BIRD_CONFIDENCE = 0.5
     BIRD_LABEL = "bird"
-    FIREBASE_KEY_FILE_NAME = "firebase_key.json"
+
+    # sounds
     MUSIC_END_EVENT = pygame.USEREVENT + 1
+
+    # firebase
+    DEVICE_ID = 1
+    FIREBASE_KEY_FILE_NAME = "firebase_key.json"
+    COMMANDS_DB_URL = {"databaseURL": "https://commands.europe-west1.firebasedatabase.app/"}
+    DETECTIONS_DB_URL = {"databaseURL": "https://detections.europe-west1.firebasedatabase.app/"}
 
     def __init__(self):
         self.bird_detection_scores: List = []
         args = self._get_input_arguments()
-        self.network = BirdDetectionNetwork()
+        if USE_NETWORK:
+            self.network = BirdDetectionNetwork()
 
         self.sounds = SoundLibrary()
 
@@ -178,8 +188,7 @@ class BigScaryOwl:
 
         # initalize firebase app
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
-        app_data = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/"}
-        firebase_admin.initialize_app(cred, app_data)
+        firebase_admin.initialize_app(cred, self.COMMANDS_DB_URL)
         self.ref = db.reference("/")
 
     @staticmethod
@@ -197,11 +206,19 @@ class BigScaryOwl:
         while True:
             self._update_ticks()
 
-            frame, input_data = self.network.transform_video_frame(self.videostream.read())
-            if self.RUN_NETWORK:
+            camera_frame = self.videostream.read()
+            if USE_NETWORK:
+                frame, input_data = self.network.transform_video_frame(camera_frame)
                 self.network.run_image_through_network(input_data)
-            self.analyze_detections(frame)
+                if self._is_bird_detected(frame):
+                    self._bird_detected_action()
+            else:
+                frame = camera_frame
+                if self.frame_count % 100 == 0:
+                    self._bird_detected_action()
+
             self.show_frame(frame)
+            # TODO@niv: make this a thread or add frame counter
             self.check_realtime_triggers()
 
             # Press 'q' to quit
@@ -229,40 +246,36 @@ class BigScaryOwl:
         # All the results have been drawn on the frame, so it's time to display it.
         cv2.imshow('Object detector', frame)
 
-    def analyze_detections(self, frame):
-        if self.RUN_NETWORK:
-            boxes, classes, scores = self.network.get_detection_results()
+    def _is_bird_detected(self, frame):
+        is_action_needed = False
+        boxes, classes, scores = self.network.get_detection_results()
 
-            # Loop over all detections and draw detection box if confidence is above minimum threshold
-            is_saw_bird = False
-            best_bird_score = 0
-            for detection_id in range(len(scores)):
-                curr_confidence = scores[detection_id]
-                curr_label = self.network.get_label(classes[detection_id])
+        # Loop over all detections and draw detection box if confidence is above minimum threshold
+        is_saw_bird = False
+        best_bird_score = 0
+        for detection_id in range(len(scores)):
+            curr_confidence = scores[detection_id]
+            curr_label = self.network.get_label(classes[detection_id])
 
-                if (curr_confidence > self.min_confidence_threshold) and (curr_confidence <= 1.0):
-                    self.draw_detection(boxes, curr_label, frame, detection_id, scores)
+            if (curr_confidence > self.min_confidence_threshold) and (curr_confidence <= 1.0):
+                self.draw_detection(boxes, curr_label, frame, detection_id, scores)
 
-                if curr_label == self.BIRD_LABEL:
-                    is_saw_bird = True
-                    best_bird_score = max(best_bird_score, curr_confidence)
-                    if self._is_bird_high_certainty(curr_confidence):
-                        self._bird_detected_action()
-                        # print(f"bird found with confidence {curr_confidence}")
-                        # self.send_data_firebase(curr_label, curr_confidence)
+            if curr_label == self.BIRD_LABEL:
+                is_saw_bird = True
+                best_bird_score = max(best_bird_score, curr_confidence)
+                is_action_needed = self._is_bird_high_certainty(curr_confidence)
 
-            if is_saw_bird:
-                self.bird_detection_scores.append(best_bird_score)
-        else:
-            if not self.frame_count % 100:
-                self._bird_detected_action()
+        if is_saw_bird:
+            self.bird_detection_scores.append(best_bird_score)
+
+        return is_action_needed
 
     def _is_bird_high_certainty(self, curr_confidence):
         # TODO@niv: if len(self.bird_detection_scores) > 3 and ...
         return curr_confidence > self.BIRD_CONFIDENCE
 
     def _bird_detected_action(self):
-        self._play_sound_action(self.sounds.random_sound())
+        # self._play_sound_action(self.sounds.random_sound())
         self._flap_wings_action()
 
         print(f"frames={self.frame_count}")
@@ -299,20 +312,19 @@ class BigScaryOwl:
         cv2.rectangle(frame, (xmin, label_ymin - label_size[1] - 10), (xmin + label_size[0], label_ymin + base_line - 10), (255, 255, 255), cv2.FILLED)
         cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)  # Draw label text
 
-    # def send_data_firebase(self, label, confidence):
-    #     message = messaging.Message(
-    #         data={
-    #             'label': label,
-    #             'confidence': confidence,
-    #             'time': datetime.now(),
-    #         },
-    #         token=self.firebase_registration_token)
-    #
-    #     response = messaging.send(message)
-    #     print('Successfully sent message:', response)
     def check_realtime_triggers(self):
-        # self.ref.set()
-        pass
+        """
+        this takes about half a second, depending on internet speed
+        """
+        commands = self.ref.get("")
+        assert isinstance(commands, list)
+        for i, command in enumerate(commands):
+            if command["device_id"] == self.DEVICE_ID and not command["applied"]:
+                command_type = command["type"]
+                print(f"activating command {command_type}")
+                commands[i]["applied"] = True
+
+        self.ref.set(commands)
 
     def kill_all_threads(self):
         self._stop_music()
