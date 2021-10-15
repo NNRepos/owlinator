@@ -1,15 +1,18 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/material.dart';
 import 'data/command.dart';
 import 'data/command_doa.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  runApp(const MyApp());
+  // runApp(const MyApp());
 
+  final FirebaseApp app = FirebaseApp(name: '[DEFAULT]');
+  final DatabaseReference db = FirebaseDatabase(app: firebaseApp).reference();
+  db.child('your_db_child').once().then((result) => print('result = $result'));
+  runApp(const MyApp());
 
 
 }
