@@ -1,15 +1,30 @@
+import 'package:Owlinator/Authentication.dart';
+
 import 'owl_page.dart';
 import 'package:flutter/material.dart';
 
 
-class MainPage extends StatefulWidget {
+class HomePage extends StatefulWidget {
+
+  HomePage({required this.auth, required this.onSignedOut});
+  final AuthImplementation auth;
+  final VoidCallback onSignedOut;
   @override
-  _MainPageState createState() => _MainPageState();
+  _HomePageState createState() => _HomePageState();
 }
 
 
-class _MainPageState extends State<MainPage> {
-  int _selectedIndex = 1;
+class _HomePageState extends State<HomePage> {
+  int _selectedIndex = 0;
+
+  void _logoutUser() async {
+    try {
+      await widget.auth.signOut();
+      widget.onSignedOut();
+    } catch(e) {
+      print("Error: " + e.toString());
+    }
+  }
 
   static const TextStyle optionStyle =
   TextStyle(fontSize: 30, fontWeight: FontWeight.bold);
@@ -38,6 +53,12 @@ class _MainPageState extends State<MainPage> {
         'Index 2: Account Settings',
         style: optionStyle,
       ),
+      IconButton(
+        icon: Icon(Icons.cancel),
+        iconSize: 50,
+        color: Colors.red,
+        onPressed: _logoutUser
+      )
     ];
 
 
@@ -61,7 +82,8 @@ class _MainPageState extends State<MainPage> {
       items: [
         BottomNavigationBarItem(icon: Icon(Icons.flutter_dash), label: "Owls"),
         BottomNavigationBarItem(icon: Icon(Icons.add), label: "Add Device"),
-        BottomNavigationBarItem(icon: Icon(Icons.account_circle), label: "Account Settings")
+        BottomNavigationBarItem(icon: Icon(Icons.account_circle), label: "Account Settings"),
+        BottomNavigationBarItem(icon: Icon(Icons.cancel), label: "Log Out")
       ],
     );
   }
