@@ -5,6 +5,7 @@ abstract class AuthImplementation {
   Future<String> signUp(String email, String pass);
   Future<User?> getCurrentUser();
   Future<void> signOut();
+  String getErrorMessage(FirebaseAuthException e);
 }
 
 class Auth implements AuthImplementation {
@@ -62,7 +63,7 @@ class Auth implements AuthImplementation {
         errorMessage = "The email used already exists.";
         break;
       default:
-        errorMessage = "An undefined Error happened.";
+        errorMessage = "An undefined error happened.";
     }
     return errorMessage;
   }

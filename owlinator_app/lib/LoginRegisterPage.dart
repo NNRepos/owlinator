@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'Authentication.dart';
@@ -19,6 +20,9 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
   FormType _formType = FormType.login;
   String _email = '';
   String _password = '';
+  String _firstName = '';
+  String _lastName = '';
+  FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   //methods
   bool validateAndSave() {
@@ -32,25 +36,36 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
   }
 
   Future<Widget?> validateAndSubmit() async {
-    if(validateAndSave()){
+    FocusScope.of(context).unfocus();
+    if (validateAndSave()) {
       try {
-        if(_formType == FormType.login){
-          EasyLoading.show(status: 'loading...');
-          String userId = await widget.auth.signIn(_email, _password).whenComplete(() => EasyLoading.dismiss());
+        if (_formType == FormType.login) {
+          EasyLoading.show(status: 'Loading...');
+          String userId = await widget.auth.signIn(_email, _password);
+          EasyLoading.dismiss();
           print("userId: " + userId + " logged in");
-
         } else {
-          EasyLoading.show(status: 'loading...');
-          String userId = await widget.auth.signUp(_email, _password).whenComplete(() => EasyLoading.dismiss());
+          EasyLoading.show(status: 'Loading...');
+          String userId = await widget.auth.signUp(_email, _password);
+          EasyLoading.dismiss();
+          final Map<String, String> userData = {
+            'firstName': _firstName,
+            'lastName': _lastName,
+            'email': _email,
+            'uid': userId
+          };
+          await _firestore.collection('UserData').doc(userId).set(userData);
           print("userId: " + userId + " sign up");
         }
 
         widget.onSignedIn();
-      } on FirebaseAuthException catch(e){
+      } on FirebaseAuthException catch (e) {
         print(e.code);
+        EasyLoading.dismiss();
         return showDialog(
           context: context,
-          builder: (BuildContext context) => _buildPopupDialog(context, "Authentication Error", Auth().getErrorMessage(e)),
+          builder: (BuildContext context) => _buildPopupDialog(
+              context, "Authentication Error", widget.auth.getErrorMessage(e)),
         );
       }
     }
@@ -74,27 +89,53 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
   Widget build(BuildContext context) {
     return Scaffold(
         appBar: AppBar(
-          title: _formType == FormType.login ? Text("Login") : Text("Register")
-        ),
-        body: Container(
-            margin: EdgeInsets.all(15.0),
-            child: Form(
-                key: formKey,
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: createInputs() + createButtons())
-            )
-        )
-    );
+            title:
+                _formType == FormType.login ? Text("Login") : Text("Register")),
+        body: SingleChildScrollView(
+            child: Container(
+                margin: EdgeInsets.all(15.0),
+                child: Form(
+                    key: formKey,
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: createInputs() + createButtons())))));
   }
 
   List<Widget> createInputs() {
-    return [
-      SizedBox(height: 10.0),
+    List<Widget> logoWidget = [
       logo(),
-      SizedBox(height: 20.0),
+    ];
+
+    List<Widget> names = [
+      SizedBox(height: 10.0),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+        Expanded(
+          child: TextFormField(
+              decoration: InputDecoration(labelText: 'First Name*'),
+              validator: (name) {
+                return name == null ? "First Name is required" : null;
+              },
+              onSaved: (value) {
+                _firstName = value!;
+              }),
+        ),
+        Expanded(
+          child: TextFormField(
+              decoration: InputDecoration(labelText: 'Last Name*'),
+              validator: (name) {
+                return name == null ? "Last Name is required" : null;
+              },
+              onSaved: (value) {
+                _lastName = value!;
+              }),
+        )
+      ])
+    ];
+
+    List<Widget> emailAndPassword = [
+      SizedBox(height: 10.0),
       TextFormField(
-          decoration: InputDecoration(labelText: 'Email'),
+          decoration: InputDecoration(labelText: 'Email*'),
           validator: (email) {
             if (email == null || email.isEmpty) {
               return 'Please enter an email';
@@ -113,7 +154,7 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
           }),
       SizedBox(height: 10.0),
       TextFormField(
-          decoration: InputDecoration(labelText: 'Password'),
+          decoration: InputDecoration(labelText: 'Password*'),
           obscureText: true,
           validator: (pass) {
             if (pass == null) {
@@ -126,45 +167,45 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
           onSaved: (value) {
             _password = value!;
           }),
-      SizedBox(height: 20.0),
     ];
+
+    return _formType == FormType.register
+        ? [...logoWidget, ...names, ...emailAndPassword]
+        : [...logoWidget, ...emailAndPassword];
   }
 
   Widget logo() {
-    return Hero(
-      tag:'Hero',
-      child: Text('Logo')
-    );
+    return Image.asset('assets/logo.png',
+        width: 200.0, height: 200.0, color: Colors.red);
   }
 
-  List<Widget> createButtons(){
-    if(_formType == FormType.login) {
+  List<Widget> createButtons() {
+    if (_formType == FormType.login) {
       return [
         TextButton(
-          child: Text('Do Not Have an Account? Create Account', style: TextStyle(fontSize: 13.0)),
-          style: TextButton.styleFrom(primary: Colors.red),
-          onPressed: moveToRegister
-        ),
+            child: Text('Do Not Have an Account? Create Account',
+                style: TextStyle(fontSize: 13.0)),
+            style: TextButton.styleFrom(primary: Colors.red),
+            onPressed: moveToRegister),
         TextButton(
             child: Text('Login', style: TextStyle(fontSize: 20.0)),
-            style: TextButton.styleFrom(primary: Colors.white, backgroundColor: Colors.green),
-            onPressed: validateAndSubmit
-        ),
+            style: TextButton.styleFrom(
+                primary: Colors.white, backgroundColor: Colors.green),
+            onPressed: validateAndSubmit),
       ];
     } else {
       return [
         TextButton(
-            child: Text('Already Have an Account? Login', style: TextStyle(fontSize: 13.0)),
+            child: Text('Already Have an Account? Login',
+                style: TextStyle(fontSize: 13.0)),
             style: TextButton.styleFrom(primary: Colors.red),
-            onPressed: moveToLogin
-        ),
+            onPressed: moveToLogin),
         TextButton(
             child: Text('Create Account', style: TextStyle(fontSize: 20.0)),
-            style: TextButton.styleFrom(primary: Colors.white, backgroundColor: Colors.green),
-            onPressed: validateAndSubmit
-        ),
+            style: TextButton.styleFrom(
+                primary: Colors.white, backgroundColor: Colors.green),
+            onPressed: validateAndSubmit),
       ];
-
     }
   }
 

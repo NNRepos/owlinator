@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'Authentication.dart';
 import 'HomePage.dart';
@@ -54,6 +55,7 @@ class _MappingPageState extends State<MappingPage> {
         return new HomePage(
           auth: widget.auth,
           onSignedOut: _signedOut,
+          firestore: FirebaseFirestore.instance,
         );
     }
   }

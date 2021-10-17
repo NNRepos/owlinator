@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 
 class OwlPage extends StatefulWidget {
+
+  OwlPage({required this.id});
+  String id;
+
+
   @override
   _OwlPageState createState() => _OwlPageState();
 }
