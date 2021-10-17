@@ -1,128 +1,192 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-
-final _auth = FirebaseAuth.instance;
-String email = '';
-String password = '';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
+import 'Authentication.dart';
 
 class LoginRegisterPage extends StatefulWidget {
-  const LoginRegisterPage({Key? key}) : super(key: key);
+  LoginRegisterPage({required this.auth, required this.onSignedIn});
+  final AuthImplementation auth;
+  final VoidCallback onSignedIn;
 
   @override
   _LoginRegisterPageState createState() => _LoginRegisterPageState();
 }
 
+enum FormType { login, register }
+
 class _LoginRegisterPageState extends State<LoginRegisterPage> {
-  final _formKey = GlobalKey<FormState>();
+  final formKey = new GlobalKey<FormState>();
+  FormType _formType = FormType.login;
+  String _email = '';
+  String _password = '';
+
+  //methods
+  bool validateAndSave() {
+    final form = formKey.currentState!;
+    if (form.validate()) {
+      form.save();
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  Future<Widget?> validateAndSubmit() async {
+    if(validateAndSave()){
+      try {
+        if(_formType == FormType.login){
+          EasyLoading.show(status: 'loading...');
+          String userId = await widget.auth.signIn(_email, _password).whenComplete(() => EasyLoading.dismiss());
+          print("userId: " + userId + " logged in");
+
+        } else {
+          EasyLoading.show(status: 'loading...');
+          String userId = await widget.auth.signUp(_email, _password).whenComplete(() => EasyLoading.dismiss());
+          print("userId: " + userId + " sign up");
+        }
+
+        widget.onSignedIn();
+      } on FirebaseAuthException catch(e){
+        print(e.code);
+        return showDialog(
+          context: context,
+          builder: (BuildContext context) => _buildPopupDialog(context, "Authentication Error", Auth().getErrorMessage(e)),
+        );
+      }
+    }
+  }
+
+  void moveToRegister() {
+    formKey.currentState!.reset();
+    setState(() {
+      _formType = FormType.register;
+    });
+  }
+
+  void moveToLogin() {
+    formKey.currentState!.reset();
+    setState(() {
+      _formType = FormType.login;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Build a Form widget using the _formKey created above.
     return Scaffold(
         appBar: AppBar(
-          title: Center( child: Text('Login Page')),
+          title: _formType == FormType.login ? Text("Login") : Text("Register")
         ),
-        body: Center(
-          child: Form(
-            child: Column(
-              key: _formKey,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: <Widget>[
-                Padding(
-                  padding: EdgeInsets.all(10),
-                  child: TextFormField(
-                    autofocus: true,
-                    style: TextStyle(fontSize: 15.0, color: Colors.black),
-                    validator: (email) {
-                      if (email == null || email.isEmpty) {
-                        return 'Please enter an email';
-                      } else {
-                        bool emailValid = RegExp(r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+").hasMatch(email);
-                        if(!emailValid) {
-                          return 'Please enter a valid email';
-                        }
-                      }
-                      return null;
-                    },
-                    decoration: InputDecoration(
-                      border: InputBorder.none,
-                      hintText: 'Email',
-                      filled: true,
-                      fillColor: Colors.grey,
-                      contentPadding: const EdgeInsets.only(
-                          left: 14.0, bottom: 6.0, top: 8.0),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.red),
-                        borderRadius: BorderRadius.circular(10.0),
-                      ),
-                      enabledBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: Colors.grey),
-                        borderRadius: BorderRadius.circular(10.0),
-                      ),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: EdgeInsets.all(10),
-                  child: Stack(
-                    alignment: const Alignment(0, 0),
-                    children: <Widget>[
-                      TextFormField(
-                        obscureText: true,
-                        autofocus: false,
-                        style: TextStyle(fontSize: 15.0, color: Colors.black),
-                        validator: (pass) {
-                          if (pass == null || pass.isEmpty) {
-                            return 'Please enter a valid email';
-                          }
-                          return null;
-                        },
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          hintText: 'Password',
-                          filled: true,
-                          fillColor: Colors.grey,
-                          contentPadding: const EdgeInsets.only(
-                              left: 14.0, bottom: 6.0, top: 8.0),
-                          focusedBorder: OutlineInputBorder(
-                            borderSide: BorderSide(color: Colors.red),
-                            borderRadius: BorderRadius.circular(10.0),
-                          ),
-                          enabledBorder: UnderlineInputBorder(
-                            borderSide: BorderSide(color: Colors.grey),
-                            borderRadius: BorderRadius.circular(10.0),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Container(
-                      height: 50,
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          // Validate returns true if the form is valid, or false
-                          // otherwise.
-                          if (_formKey.currentState == null ? false : _formKey.currentState!.validate()) {
-                            // If the form is valid, display a Snackbar.
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Processing Data')));
-                          }
-                        },
-                        child: Text(
-                          'Submit',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    )
-                ),
-              ],
-            ),
-          )
+        body: Container(
+            margin: EdgeInsets.all(15.0),
+            child: Form(
+                key: formKey,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: createInputs() + createButtons())
+            )
+        )
+    );
+  }
+
+  List<Widget> createInputs() {
+    return [
+      SizedBox(height: 10.0),
+      logo(),
+      SizedBox(height: 20.0),
+      TextFormField(
+          decoration: InputDecoration(labelText: 'Email'),
+          validator: (email) {
+            if (email == null || email.isEmpty) {
+              return 'Please enter an email';
+            } else {
+              bool emailValid = RegExp(
+                      r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+")
+                  .hasMatch(email);
+              if (!emailValid) {
+                return 'Please enter a valid email';
+              }
+            }
+            return null;
+          },
+          onSaved: (value) {
+            _email = value!;
+          }),
+      SizedBox(height: 10.0),
+      TextFormField(
+          decoration: InputDecoration(labelText: 'Password'),
+          obscureText: true,
+          validator: (pass) {
+            if (pass == null) {
+              return 'Password is required';
+            } else if (pass.isEmpty) {
+              return 'Password is required';
+            }
+            return null;
+          },
+          onSaved: (value) {
+            _password = value!;
+          }),
+      SizedBox(height: 20.0),
+    ];
+  }
+
+  Widget logo() {
+    return Hero(
+      tag:'Hero',
+      child: Text('Logo')
+    );
+  }
+
+  List<Widget> createButtons(){
+    if(_formType == FormType.login) {
+      return [
+        TextButton(
+          child: Text('Do Not Have an Account? Create Account', style: TextStyle(fontSize: 13.0)),
+          style: TextButton.styleFrom(primary: Colors.red),
+          onPressed: moveToRegister
         ),
+        TextButton(
+            child: Text('Login', style: TextStyle(fontSize: 20.0)),
+            style: TextButton.styleFrom(primary: Colors.white, backgroundColor: Colors.green),
+            onPressed: validateAndSubmit
+        ),
+      ];
+    } else {
+      return [
+        TextButton(
+            child: Text('Already Have an Account? Login', style: TextStyle(fontSize: 13.0)),
+            style: TextButton.styleFrom(primary: Colors.red),
+            onPressed: moveToLogin
+        ),
+        TextButton(
+            child: Text('Create Account', style: TextStyle(fontSize: 20.0)),
+            style: TextButton.styleFrom(primary: Colors.white, backgroundColor: Colors.green),
+            onPressed: validateAndSubmit
+        ),
+      ];
+
+    }
+  }
+
+  Widget _buildPopupDialog(BuildContext context, String title, String message) {
+    return AlertDialog(
+      title: Text(title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(message),
+        ],
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          style: TextButton.styleFrom(primary: Colors.black),
+          child: Text('Close'),
+        ),
+      ],
     );
   }
 }
