@@ -12,9 +12,17 @@ class UserData {
         lastName = json['lastName'] as String,
         uid = json['uid'] as String,
         email = json['email'] as String,
-        devices = (json['devices'] as List<dynamic>)
+        devices = (json['devices'] == null ?  List<Device>.empty()  : (json['devices'] as List<dynamic>)
             .map((dynamic e) => Device.fromJson(e as Map<dynamic, dynamic>))
-            .toList();
+            .toList());
+
+  UserData.emptyUser():
+      firstName = '',
+      lastName = '',
+      uid = '',
+      email = '',
+      devices = List<Device>.empty();
+
 
   Map<dynamic, dynamic> toJson() => <dynamic, dynamic>{
         'firstName': firstName,

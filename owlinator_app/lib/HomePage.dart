@@ -2,7 +2,7 @@ import 'package:Owlinator/Authentication.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import 'owl_page.dart';
+import 'owlPage.dart';
 import 'package:flutter/material.dart';
 import 'data/UserData.dart';
 
@@ -20,7 +20,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   List<Device> _devices = [];
-  UserData? _userData = null;
+  UserData _userData = UserData.emptyUser();
 
   void _logoutUser() async {
     try {
@@ -38,6 +38,8 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     _updateDeviceList();
     bool noDevices = _devices.length == 0;
+
+
     List<Widget> _widgetOptions = <Widget>[
       ListView.builder(
           itemCount: noDevices ? 1 : _devices.length,
@@ -106,7 +108,7 @@ class _HomePageState extends State<HomePage> {
         physics: BouncingScrollPhysics(),
         children: [
           SizedBox(height: 200),
-          buildName(_userData!),
+          buildName(_userData),
           SizedBox(height: 50),
           Center(
               child: Column(
@@ -189,7 +191,7 @@ class _HomePageState extends State<HomePage> {
         if (snapshot.exists) {
           setState(() {
             _userData = UserData.fromJson(snapshot.data()!);
-            _devices = _userData!.devices;
+            _devices = _userData.devices;
           });
         }
       });

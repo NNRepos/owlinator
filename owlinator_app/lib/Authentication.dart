@@ -62,6 +62,9 @@ class Auth implements AuthImplementation {
       case "email-already-exists":
         errorMessage = "The email used already exists.";
         break;
+      case "email-already-in-use":
+        errorMessage = "The given email is aready in use.";
+        break;
       default:
         errorMessage = "An undefined error happened.";
     }
