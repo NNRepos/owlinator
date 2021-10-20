@@ -11,7 +11,7 @@ class CommandDao {
   late DatabaseReference _commandsRef;
 
   CommandDao(this.userData){
-    _commandsRef = FirebaseDatabase.instance.reference().child(userData.uid).child("commands");
+    _commandsRef = FirebaseDatabase.instance.reference().child('users').child(userData.uid).child("commands").child('device');
   }
 
 
