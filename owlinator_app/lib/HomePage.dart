@@ -49,7 +49,7 @@ class _HomePageState extends State<HomePage> {
                 key: Key(noDevices ? '0' : item!.id),
                 onDismissed: (direction) {
                   if (!noDevices) {
-                    setState(() {
+                    if(this.mounted) setState(() {
                       _removeDevice(item!);
                       _updateDeviceList();
                     });
@@ -147,7 +147,7 @@ class _HomePageState extends State<HomePage> {
       type: BottomNavigationBarType.fixed,
       currentIndex: _selectedIndex,
       onTap: (value) {
-        setState(() {
+        if(this.mounted) setState(() {
           _selectedIndex = value;
         });
       },
@@ -188,7 +188,7 @@ class _HomePageState extends State<HomePage> {
           .get()
           .then<dynamic>((DocumentSnapshot<Map<String, dynamic>> snapshot) {
         if (snapshot.exists) {
-          setState(() {
+          if(this.mounted) setState(() {
             _userData = UserData.fromJson(snapshot.data()!);
             _devices = _userData.devices;
           });
