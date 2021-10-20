@@ -2,6 +2,6 @@
 sudo pip3 install virtualenv
 python3 -m venv tflite1-env
 source tflite1-env/bin/activate
+python3 -m pip install -r requirements.txt
 bash get_pi_requirements.sh
-python3 TFLite_detection_webcam.py --modeldir=Sample_TFLite_model
-
+python3 shoot_birds.py
