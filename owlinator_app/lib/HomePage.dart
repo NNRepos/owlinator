@@ -2,7 +2,7 @@ import 'package:Owlinator/Authentication.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import 'owlPage.dart';
+import 'OwlPage.dart';
 import 'package:flutter/material.dart';
 import 'data/UserData.dart';
 
@@ -92,7 +92,8 @@ class _HomePageState extends State<HomePage> {
                         shadowColor: Colors.grey,
                         child: ListTile(
                           leading: ImageIcon(AssetImage('assets/logo.png'),
-                              size: 40),
+                              size: 40,
+                          color: Colors.red),
                           title: Text(item!.name),
                           subtitle: Text('ID: ' + item.id),
                           onTap: () {
@@ -100,7 +101,7 @@ class _HomePageState extends State<HomePage> {
                                 context,
                                 MaterialPageRoute<OwlPage>(
                                     builder: (context) => OwlPage(
-                                        id: item.id))); //OwlPage(device.id)
+                                        device: item, userData: _userData,)));
                           },
                         )));
           }),
@@ -132,13 +133,11 @@ class _HomePageState extends State<HomePage> {
       appBar: buildAppBar(),
       body: Center(child: _widgetOptions.elementAt(_selectedIndex)),
       bottomNavigationBar: buildBottomNavigationBar(),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: _selectedIndex == 1 ? null : FloatingActionButton(
           child: Icon(Icons.add),
           onPressed: () {
             _addDevice(context);
             _updateDeviceList();
-            ScaffoldMessenger.of(context)
-                .showSnackBar(SnackBar(content: Text('New device added')));
           }),
     );
   }
@@ -259,6 +258,8 @@ class _HomePageState extends State<HomePage> {
                       .update({
                     'devices': newDevices.map((e) => e.toJson()).toList()
                   });
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text(newName + ' added')));
                 }
                 _updateDeviceList();
                 Navigator.pop(context);
