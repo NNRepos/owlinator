@@ -1,10 +1,14 @@
 import 'package:Owlinator/Authentication.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/cupertino.dart';
 
 import 'OwlPage.dart';
 import 'package:flutter/material.dart';
+import 'data/CommandDao.dart';
+import 'data/OwlSettings.dart';
 import 'data/UserData.dart';
+import 'data/OwlSettingsDao.dart';
 
 class HomePage extends StatefulWidget {
   HomePage(
@@ -46,7 +50,7 @@ class _HomePageState extends State<HomePage> {
           itemBuilder: (BuildContext context, int index) {
             Device? item = noDevices ? null : _devices[index];
             return Dismissible(
-                key: Key(noDevices ? '0' : item!.id),
+                key: Key(noDevices ? "-1" : item!.id),
                 onDismissed: (direction) {
                   if (!noDevices) {
                     if(this.mounted) setState(() {
@@ -101,7 +105,7 @@ class _HomePageState extends State<HomePage> {
                                 context,
                                 MaterialPageRoute<OwlPage>(
                                     builder: (context) => OwlPage(
-                                        device: item, userData: _userData,)));
+                                        device: item, userData: _userData, firestore: widget.firestore,)));
                           },
                         )));
           }),
@@ -206,10 +210,15 @@ class _HomePageState extends State<HomePage> {
     await widget.firestore
         .collection('UserData')
         .doc(user!.uid)
-        .update({'devices': _devices.map((e) => e.toJson()).toList()});
+        .update(<String, List<Map<dynamic, dynamic>>>{'devices': _devices.map((e) => e.toJson()).toList()});
+    FirebaseFirestore.instance
+        .collection("Owls")
+        .doc(item.id).delete();
+    CommandDao(_userData).deleteDeviceCommands(item.id);
   }
 
   void _addDevice(BuildContext context) async {
+    List<String> existingIds = await OwlSettingsDao().getAllOwlIds();
     return showDialog(
       context: context,
       builder: (context) {
@@ -247,19 +256,29 @@ class _HomePageState extends State<HomePage> {
                 if (!_devices.contains(newDevice) &&
                     newId.isNotEmpty &&
                     newName.isNotEmpty) {
-                  User? user = await widget.auth.getCurrentUser();
-                  List<Device> newDevices = [..._devices, newDevice];
-                  newDevices.sort((a, b) {
-                    return int.parse(a.id).compareTo(int.parse(b.id));
-                  });
-                  await widget.firestore
-                      .collection('UserData')
-                      .doc(user!.uid)
-                      .update({
-                    'devices': newDevices.map((e) => e.toJson()).toList()
-                  });
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text(newName + ' added')));
+                  if (existingIds.contains(newId)) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(
+                        SnackBar(content: Text("Cannot add Owl with id: $newId. Already connected to an account")));
+                  } else {
+                    User? user = await widget.auth.getCurrentUser();
+                    List<Device> newDevices = [..._devices, newDevice];
+                    newDevices.sort((a, b) {
+                      return int.parse(a.id).compareTo(int.parse(b.id));
+                    });
+                    await widget.firestore
+                        .collection('UserData')
+                        .doc(user!.uid)
+                        .update({
+                      'devices': newDevices.map((e) => e.toJson()).toList()
+                    });
+                    OwlSettings settings = OwlSettings.defaultSettings(
+                        newDevice, _userData.uid);
+                    OwlSettingsDao().setSettings(settings);
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(
+                        SnackBar(content: Text(newName + ' added')));
+                  }
                 }
                 _updateDeviceList();
                 Navigator.pop(context);

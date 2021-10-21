@@ -43,4 +43,8 @@ class CommandDao {
       ),
     );
   }
+
+  void deleteDeviceCommands(String id){
+    _commandsRef.child(id).remove();
+  }
 }

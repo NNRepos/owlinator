@@ -3,7 +3,7 @@ class UserData {
   final String lastName;
   final String uid;
   final String email;
-  final List<Device> devices;
+  List<Device> devices;
 
   UserData(this.firstName, this.lastName, this.uid, this.email, this.devices);
 
@@ -34,8 +34,8 @@ class UserData {
 }
 
 class Device {
-  final String id;
-  final String name;
+  String id;
+  String name;
 
   Device(this.id, this.name);
 
