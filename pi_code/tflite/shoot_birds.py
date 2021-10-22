@@ -2,13 +2,13 @@ import argparse
 import random
 from pathlib import Path
 from threading import Thread
-from typing import List
+from typing import List, Optional, Any
 
 import cv2
 import firebase_admin
 import numpy as np
 import pygame
-from firebase_admin import credentials, db
+from firebase_admin import credentials, db, firestore
 from pygame import mixer, event
 
 USE_NETWORK = False
@@ -19,6 +19,14 @@ if USE_NETWORK:
         from tflite_runtime.interpreter import Interpreter
     except ImportError:
         from tensorflow.lite.python.interpreter import Interpreter
+
+try:
+    import RPi.GPIO as GPIO
+
+    GPIO.setmode(GPIO.BOARD)
+except ImportError:
+    GPIO: Any = None
+    print("gpio module not imported")
 
 
 class VideoStream:
@@ -76,6 +84,45 @@ class SoundLibrary:
 
     def random_sound(self):
         return random.choice(self.all_sounds)
+
+
+class ServoController:
+    PWM_HZ = 50
+
+    def __init__(self, head_pin=11, right_pin=13, left_pin=15):
+        GPIO.setup(head_pin, GPIO.OUT)
+        GPIO.setup(right_pin, GPIO.OUT)
+        GPIO.setup(left_pin, GPIO.OUT)
+
+        # Note 11 is pin, 50 = 50Hz pulse
+        self.servo_head = GPIO.PWM(head_pin, self.PWM_HZ)
+        self.servo_right = GPIO.PWM(right_pin, self.PWM_HZ)
+        self.servo_left = GPIO.PWM(left_pin, self.PWM_HZ)
+
+        self.servo_head.start(0)
+        self.servo_right.start(0)
+        self.servo_left.start(0)
+
+    def move_to_degree(self, servo_name, degree):
+        if not 0 <= degree <= 180:
+            return
+
+        duty = 2 + round(degree / 18)
+        if servo_name == "right":
+            self.servo_right.ChangeDutyCycle(duty)
+        elif servo_name == "left":
+            self.servo_left.ChangeDutyCycle(duty)
+        elif servo_name == "head":
+            self.servo_head.ChangeDutyCycle(duty)
+
+    def clean_up(self):
+        self.servo_head.stop()
+        self.servo_right.stop()
+        self.servo_head.stop()
+        GPIO.cleanup()
+
+    def set_head_degree(self, degree):
+        self.move_to_degree("head", degree)
 
 
 class BirdDetectionNetwork:
@@ -161,10 +208,18 @@ class BigScaryOwl:
     def __init__(self):
         self.bird_detection_scores: List = []
         args = self._get_input_arguments()
+        self.min_confidence_threshold = float(args.threshold)
+        self.im_width, self.im_height = [int(val) for val in args.resolution.split('x')]
 
+        # bird detection
         if USE_NETWORK:
             self.network = BirdDetectionNetwork()
 
+        # servo motor
+        if GPIO is not None:
+            self.servo_motors = ServoController(head_pin=args.headpin, right_pin=args.rightpin, left_pin=args.leftpin)
+
+        # sounds
         self.sounds = SoundLibrary()
 
         # use pygame for the sound mixer
@@ -173,26 +228,31 @@ class BigScaryOwl:
         mixer.music.set_endevent(self.MUSIC_END_EVENT)
         self.playing_sound = False
 
+        # frame rate calculation
         self.loop_ticks = 0
         self.frame_count = 0
-
-        self.min_confidence_threshold = float(args.threshold)
-        self.im_width, self.im_height = [int(val) for val in args.resolution.split('x')]
-
-        # Initialize frame rate calculation
         self.frame_rate_calc = 0.0
         self.freq = cv2.getTickFrequency()
 
-        # Initialize video stream
+        # video stream
         self.videostream = VideoStream(resolution=(self.im_width, self.im_height)).start()
 
         # initalize firebase app
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
         firebase_admin.initialize_app(cred, self.DEFAULT_DB_URL)
+        firestore_client = firestore.client()
+
         self.users_db = db.reference("/users")
         self.detections_db = db.reference("/detections")
+        self.settings_db = firestore_client.collection("Owls").document(str(self.DEVICE_ID))
 
-        self.triggers_thread = None
+        # threads
+        self.triggers_thread: Optional[Thread] = None
+
+        # settings
+        self.muted = False
+        self.fixed_head = False
+        self.is_notifications_on = True
 
     @staticmethod
     def _get_input_arguments():
@@ -202,6 +262,9 @@ class BigScaryOwl:
                             default=0.5)
         parser.add_argument('--resolution', help='Desired webcam resolution in WxH. If the webcam does not support the resolution entered, errors may occur.',
                             default='1280x720')
+        parser.add_argument('--headpin', help='head servo pin number', default=11)
+        parser.add_argument('--rightpin', help='right servo pin number', default=13)
+        parser.add_argument('--leftpin', help='left servo pin number', default=15)
         return parser.parse_args()
 
     def run_video_loop(self):
@@ -224,15 +287,21 @@ class BigScaryOwl:
 
             self.triggers_thread = Thread(target=self.check_realtime_triggers)
             self.triggers_thread.start()
+            # TODO@niv: move this to thread as well
+            self.check_settings_changed()
 
             # Press 'q' to quit
             if cv2.waitKey(1) == ord('q'):
                 break
 
-        # Clean up
+        self._clean_up()
+
+    def _clean_up(self):
         self.kill_all_threads()
         cv2.destroyAllWindows()
         self.videostream.stop()
+        if GPIO is not None:
+            self.servo_motors.clean_up()
 
     def _update_ticks(self):
         if self.loop_ticks > 0:
@@ -292,13 +361,11 @@ class BigScaryOwl:
             if e.type == self.MUSIC_END_EVENT:
                 self.playing_sound = False
 
-        if not self.playing_sound:
+        if (not self.playing_sound) and (not self.muted):
             print("starting sound_process")
             mixer.music.load(sound_file_name)
             mixer.music.play()
             self.playing_sound = True
-        else:
-            print("skipping sound_process because it's still running")
 
     @staticmethod
     def _change_volume_setting(volume=0.2):
@@ -333,7 +400,6 @@ class BigScaryOwl:
         my_device = self.DEVICE_ID
         all_users = self.users_db.get("")
         assert isinstance(all_users, dict)
-        print("hoi")
 
         for user in all_users:
             if my_device < len(all_users[user]["commands"]["device"]):
@@ -347,8 +413,24 @@ class BigScaryOwl:
 
         self.users_db.set(all_users)
 
+    def check_settings_changed(self):
+        settings = self.settings_db.get().to_dict()["settings"]
+        self.muted = settings["mute"]
+        self.is_notifications_on = settings["notify"]
+        self.fixed_head = settings["fixedHead"]
+        if not self.muted:
+            self._change_volume_setting(settings["volume"] / 100)
+
+        if self.fixed_head and GPIO is not None:
+            self.servo_motors.set_head_degree(settings["angle"])
+
+        print("hi")
+
     def kill_all_threads(self):
         self._stop_music()
+
+        if self.triggers_thread:
+            self.triggers_thread.join()
 
     @staticmethod
     def _stop_music():
@@ -356,6 +438,11 @@ class BigScaryOwl:
 
     def _flap_wings_action(self):
         pass
+
+    def _go_next_head_position(self):
+        # use self.curr_head_position/duty or something
+        if (not self.fixed_head) and (GPIO is not None):
+            self.servo_motors.set_head_degree()
 
     def _run_command(self, command_type: str):
         if command_type == "Trigger Alarm":
