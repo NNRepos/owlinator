@@ -156,12 +156,12 @@ class BigScaryOwl:
     # firebase
     DEVICE_ID = 1
     FIREBASE_KEY_FILE_NAME = "firebase_key.json"
-    COMMANDS_DB_URL = {"databaseURL": "https://commands.europe-west1.firebasedatabase.app/"}
-    DETECTIONS_DB_URL = {"databaseURL": "https://detections.europe-west1.firebasedatabase.app/"}
+    DEFAULT_DB_URL = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/"}
 
     def __init__(self):
         self.bird_detection_scores: List = []
         args = self._get_input_arguments()
+
         if USE_NETWORK:
             self.network = BirdDetectionNetwork()
 
@@ -188,8 +188,11 @@ class BigScaryOwl:
 
         # initalize firebase app
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
-        firebase_admin.initialize_app(cred, self.COMMANDS_DB_URL)
-        self.ref = db.reference("/")
+        firebase_admin.initialize_app(cred, self.DEFAULT_DB_URL)
+        self.users_db = db.reference("/users")
+        self.detections_db = db.reference("/detections")
+
+        self.triggers_thread = None
 
     @staticmethod
     def _get_input_arguments():
@@ -218,8 +221,9 @@ class BigScaryOwl:
                     self._bird_detected_action()
 
             self.show_frame(frame)
-            # TODO@niv: make this a thread or add frame counter
-            self.check_realtime_triggers()
+
+            self.triggers_thread = Thread(target=self.check_realtime_triggers)
+            self.triggers_thread.start()
 
             # Press 'q' to quit
             if cv2.waitKey(1) == ord('q'):
@@ -280,7 +284,10 @@ class BigScaryOwl:
 
         print(f"frames={self.frame_count}")
 
-    def _play_sound_action(self, sound_file_name):
+    def _play_sound_action(self, sound_file_name=None):
+        if sound_file_name is None:
+            sound_file_name = self.sounds.owl_screech
+
         for e in event.get():
             if e.type == self.MUSIC_END_EVENT:
                 self.playing_sound = False
@@ -292,6 +299,13 @@ class BigScaryOwl:
             self.playing_sound = True
         else:
             print("skipping sound_process because it's still running")
+
+    @staticmethod
+    def _change_volume_setting(volume=0.2):
+        if not 0 <= volume <= 1:
+            return
+
+        pygame.mixer.music.set_volume(volume)
 
     def draw_detection(self, boxes, object_name, frame, i, scores):
         # Get bounding box coordinates and draw box
@@ -316,15 +330,22 @@ class BigScaryOwl:
         """
         this takes about half a second, depending on internet speed
         """
-        commands = self.ref.get("")
-        assert isinstance(commands, list)
-        for i, command in enumerate(commands):
-            if command["device_id"] == self.DEVICE_ID and not command["applied"]:
-                command_type = command["type"]
-                print(f"activating command {command_type}")
-                commands[i]["applied"] = True
+        my_device = self.DEVICE_ID
+        all_users = self.users_db.get("")
+        assert isinstance(all_users, dict)
+        print("hoi")
 
-        self.ref.set(commands)
+        for user in all_users:
+            if my_device < len(all_users[user]["commands"]["device"]):
+                my_device_commands = all_users[user]["commands"]["device"][my_device]
+                for command in my_device_commands:
+                    if my_device_commands[command]["applied"] == "false":
+                        command_type = my_device_commands[command]["command"]
+                        print(f"activating command {command_type}")
+                        self._run_command(command_type)
+                        my_device_commands[command]["applied"] = "true"
+
+        self.users_db.set(all_users)
 
     def kill_all_threads(self):
         self._stop_music()
@@ -335,6 +356,12 @@ class BigScaryOwl:
 
     def _flap_wings_action(self):
         pass
+
+    def _run_command(self, command_type: str):
+        if command_type == "Trigger Alarm":
+            self._play_sound_action()
+        elif command_type == "Stop Alarm":
+            self._stop_music()
 
 
 if __name__ == "__main__":
