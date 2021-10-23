@@ -1,7 +1,7 @@
-from datetime import datetime
-from PIL import Image
 import argparse
+import json
 import random
+from datetime import datetime
 from pathlib import Path
 from threading import Thread
 from time import sleep
@@ -11,6 +11,8 @@ import cv2
 import firebase_admin
 import numpy as np
 import pygame
+import requests
+from PIL import Image
 from firebase_admin import credentials, db, firestore, storage
 from pygame import mixer, event
 
@@ -80,6 +82,10 @@ class SoundLibrary:
     MUSIC_END_EVENT = pygame.USEREVENT + 1
 
     def __init__(self):
+        # use pygame for the sound mixer
+        self.playing_sound = False
+        self.muted = True
+
         pygame.init()
         mixer.init()
         mixer.music.set_endevent(self.MUSIC_END_EVENT)
@@ -92,6 +98,40 @@ class SoundLibrary:
 
     def random_sound(self):
         return random.choice(self.all_sounds)
+
+    def play_sound(self, sound_file_name):
+        for e in event.get():
+            if e.type == self.MUSIC_END_EVENT:
+                self.playing_sound = False
+
+        if (not self.playing_sound) and (not self.muted):
+            print("starting sound_process")
+            mixer.music.load(sound_file_name)
+            mixer.music.play()
+            self.playing_sound = True
+
+    @staticmethod
+    def stop_music():
+        mixer.music.stop()
+
+    @staticmethod
+    def change_volume_setting(volume=0.2):
+        if not 0 <= volume <= 1:
+            pygame.mixer.music.set_volume(volume)
+        else:
+            print("got illegal volume, skipping command")
+
+
+def _run_if_gpio(func):
+    """
+    a decorator for servo methods (we only run if GPIO was imported)
+    """
+
+    def wrapper(*args, **kwargs):
+        if GPIO is not None:
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 class ServoController:
@@ -112,28 +152,33 @@ class ServoController:
     SERVO_RESET = 0
 
     def __init__(self, head_pin=11, right_pin=13, left_pin=15):
-        GPIO.setup(head_pin, GPIO.OUT)
-        GPIO.setup(right_pin, GPIO.OUT)
-        GPIO.setup(left_pin, GPIO.OUT)
+        self.fixed_head = False
 
-        self.servo_head = GPIO.PWM(head_pin, self.PWM_HZ)
-        self.servo_right = GPIO.PWM(right_pin, self.PWM_HZ)
-        self.servo_left = GPIO.PWM(left_pin, self.PWM_HZ)
+        if GPIO is not None:
+            GPIO.setup(head_pin, GPIO.OUT)
+            GPIO.setup(right_pin, GPIO.OUT)
+            GPIO.setup(left_pin, GPIO.OUT)
 
-        self.servo_head.start(self.SERVO_RESET)
-        self.servo_right.start(self.SERVO_RESET)
-        self.servo_left.start(self.SERVO_RESET)
+            self.servo_head = GPIO.PWM(head_pin, self.PWM_HZ)
+            self.servo_right = GPIO.PWM(right_pin, self.PWM_HZ)
+            self.servo_left = GPIO.PWM(left_pin, self.PWM_HZ)
 
-        self.move_to_degree("right", self.MIN_DEGREE)
-        self.move_to_degree("left", self.DEGREE_CENTER)
-        self.move_to_degree("head", self.DEGREE_CENTER)
+            self.servo_head.start(self.SERVO_RESET)
+            self.servo_right.start(self.SERVO_RESET)
+            self.servo_left.start(self.SERVO_RESET)
 
-        self.head_position = self.DEGREE_CENTER
-        self.head_direction = self.DEGREE_PER_DUTY
+            self.move_to_degree("right", self.MIN_DEGREE)
+            self.move_to_degree("left", self.DEGREE_CENTER)
+            self.move_to_degree("head", self.DEGREE_CENTER)
 
+            self.head_position = self.DEGREE_CENTER
+            self.head_direction = self.DEGREE_PER_DUTY
+
+    @_run_if_gpio
     def degree_to_duty(self, degree: int):
         return self.MIN_DUTY + (degree // self.DEGREE_PER_DUTY)
 
+    @_run_if_gpio
     def move_to_degree(self, servo_name, degree: Union[float, int]):
         degree = int(round(degree))
         if not self.MIN_DEGREE <= degree <= self.MAX_DEGREE:
@@ -148,23 +193,28 @@ class ServoController:
         elif servo_name == "head":
             self.servo_head.ChangeDutyCycle(duty)
 
+    @_run_if_gpio
     def clean_up(self):
         self.servo_head.stop()
         self.servo_right.stop()
         self.servo_head.stop()
         GPIO.cleanup()
 
+    @_run_if_gpio
     def set_head_degree(self, degree):
         self.move_to_degree("head", degree)
 
+    @_run_if_gpio
     def rotate_head(self):
-        self.head_position += self.head_direction
-        self.set_head_degree(self.head_position)
+        if not self.fixed_head:
+            self.head_position += self.head_direction
+            self.set_head_degree(self.head_position)
 
-        # head reached min/max
-        if not (self.MIN_DEGREE < self.head_position < self.MAX_DEGREE):
-            self.head_direction = -self.head_direction
+            # head reached min/max
+            if not (self.MIN_DEGREE < self.head_position < self.MAX_DEGREE):
+                self.head_direction = -self.head_direction
 
+    @_run_if_gpio
     def flap_wings(self, times=2, sleep_time=0.5):
         for _ in range(times):
             self.move_to_degree("right", self.DEGREE_CENTER)
@@ -261,16 +311,14 @@ class BigScaryOwl:
         # bird detection
         if USE_NETWORK:
             self.network = BirdDetectionNetwork()
+            self.network_input = None
+            self.network_output = None
 
         # servo motor
-        if GPIO is not None:
-            self.servo_motors = ServoController(head_pin=args.headpin, right_pin=args.rightpin, left_pin=args.leftpin)
+        self.servo_motors = ServoController(head_pin=args.headpin, right_pin=args.rightpin, left_pin=args.leftpin)
 
         # sounds
         self.sounds = SoundLibrary()
-
-        # use pygame for the sound mixer
-        self.playing_sound = False
 
         # frame rate calculation
         self.loop_ticks = 0
@@ -293,11 +341,13 @@ class BigScaryOwl:
         # threads
         self.triggers_thread: Optional[Thread] = None
         self.settings_thread: Optional[Thread] = None
+        self.upload_image_thread: Optional[Thread] = None
+        self.network_forward_thread: Optional[Thread] = None
+        self.flap_wings_thread: Optional[Thread] = None
 
         # settings
-        self.muted = False
-        self.fixed_head = False
-        self.is_notifications_on = True
+        self.uploads_detections = False
+        self.notifies_detections = True
 
     @staticmethod
     def _get_input_arguments():
@@ -319,7 +369,9 @@ class BigScaryOwl:
             camera_frame = self.videostream.read()
             if USE_NETWORK:
                 frame, input_data = self.network.transform_video_frame(camera_frame)
-                # TODO@niv: if self.network.output_queue not None
+                # TODO@niv: if not self.network_busy:
+                #  process detections
+                #  run image thread (includes network=busy)
                 self.network.run_image_through_network(input_data)
                 self._process_detections(frame)
                 if self._is_bird_high_certainty():
@@ -336,8 +388,7 @@ class BigScaryOwl:
             self.settings_thread = Thread(target=self.check_settings_changed)
             self.settings_thread.start()
 
-            if not self.fixed_head:
-                self.rotate_head()
+            self.servo_motors.rotate_head()
 
             if cv2.waitKey(1) == ord('q'):
                 break
@@ -345,11 +396,11 @@ class BigScaryOwl:
         self._clean_up()
 
     def _clean_up(self):
+        print("cleaning up, please wait...")
         self.kill_all_threads()
         cv2.destroyAllWindows()
         self.videostream.stop()
-        if GPIO is not None:
-            self.servo_motors.clean_up()
+        self.servo_motors.clean_up()
 
     def _update_ticks(self):
         if self.loop_ticks > 0:
@@ -392,34 +443,18 @@ class BigScaryOwl:
         return False
 
     def _bird_detected_action(self, frame):
-        # self._play_sound_action(self.sounds.random_sound())
+        self._play_sound_action(self.sounds.random_sound())
         self._flap_wings_action()
-        self._save_detected_frame(frame)
+        self._save_frame_action(frame)
+        self._notify_detection_action()
 
         print(f"frames={self.frame_count}")
 
     def _play_sound_action(self, sound_file_name=None):
-        # TODO@niv: move this into sounds library
         if sound_file_name is None:
             sound_file_name = self.sounds.owl_screech
 
-        for e in event.get():
-            if e.type == self.sounds.MUSIC_END_EVENT:
-                self.playing_sound = False
-
-        if (not self.playing_sound) and (not self.muted):
-            print("starting sound_process")
-            mixer.music.load(sound_file_name)
-            mixer.music.play()
-            self.playing_sound = True
-
-    @staticmethod
-    def _change_volume_setting(volume=0.2):
-        if not 0 <= volume <= 1:
-            print("got illegal volume, skipping command")
-            return
-
-        pygame.mixer.music.set_volume(volume)
+        self.sounds.play_sound(sound_file_name=sound_file_name)
 
     def draw_detection(self, boxes, object_name, frame, i, scores):
         # get bounding box coordinates and draw box
@@ -462,51 +497,53 @@ class BigScaryOwl:
 
     def check_settings_changed(self):
         settings = self.settings_db.get().to_dict()["settings"]
-        self.muted = settings["mute"]
-        self.is_notifications_on = settings["notify"]
-        self.fixed_head = settings["fixedHead"]
-        if not self.muted:
-            self._change_volume_setting(settings["volume"] / 100)
+        self.sounds.muted = settings["mute"]
+        self.notifies_detections = settings["notify"]
+        self.servo_motors.fixed_head = settings["fixedHead"]
+        if not self.sounds.muted:
+            self.sounds.change_volume_setting(settings["volume"] / 100)
 
-        if self.fixed_head and GPIO is not None:
+        if self.servo_motors.fixed_head and GPIO is not None:
             self.servo_motors.set_head_degree(settings["angle"])
 
+    @property
+    def all_threads(self):
+        # TODO@niv: all threads
+        return [self.triggers_thread, self.settings_thread, self.upload_image_thread,
+                self.network_forward_thread, self.flap_wings_thread]
+
     def kill_all_threads(self):
-        self._stop_music()
+        self.sounds.stop_music()
 
-        if self.triggers_thread:
-            self.triggers_thread.join()
-
-    @staticmethod
-    def _stop_music():
-        mixer.music.stop()
+        for thread in self.all_threads:
+            if thread:
+                thread.join()
 
     def _flap_wings_action(self):
-        if GPIO is not None:
-            self.servo_motors.flap_wings()
-
-    def rotate_head(self):
-        if (not self.fixed_head) and (GPIO is not None):
-            self.servo_motors.rotate_head()
+        if (self.flap_wings_thread is None) or (not self.flap_wings_thread.is_alive()):
+            self.flap_wings_thread = Thread(target=self.servo_motors.flap_wings)
+            self.flap_wings_thread.start()
 
     def _run_command(self, command_type: str):
         if command_type == "Trigger Alarm":
             self._play_sound_action()
         elif command_type == "Stop Alarm":
-            self._stop_music()
+            self.sounds.stop_music()
 
-    def _save_detected_frame(self, frame):
-        print(f"start: {datetime.now()}")
-        timestamp = self._get_timestamp()
-        frame_image = Image.fromarray(frame)
-        confidence = (self.bird_detection_scores[-1] * 100) if USE_NETWORK else 0
-        full_image_name = f"{timestamp}_{self.DEVICE_ID}_{confidence}.jpg"
-        full_image_path = str(Path("images") / full_image_name)
+    def _save_frame_action(self, frame):
+        if self.uploads_detections:
+            timestamp = self._get_timestamp()
+            frame_image = Image.fromarray(frame)
+            confidence = (self.bird_detection_scores[-1] * 100) if USE_NETWORK else 0
+            full_image_name = f"{timestamp}_{self.DEVICE_ID}_{confidence}.jpg"
+            full_image_path = str(Path("images") / full_image_name)
+            self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_image_name, full_image_path))
+            self.upload_image_thread.start()
 
+    def _upload_frame_image(self, frame_image, full_image_name, full_image_path):
         frame_image.save(full_image_path)
         my_new_blob = self.detections_storage.blob(full_image_name)
         my_new_blob.upload_from_filename(filename=full_image_path, content_type="image/jpg")
-        print(f"end: {datetime.now()}")
 
     @staticmethod
     def _get_timestamp():
@@ -514,6 +551,29 @@ class BigScaryOwl:
         # year-month-day-hour-minute-second
         timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
         return timestamp
+
+    def _notify_detection_action(self):
+        # TODO@niv
+        if self.notifies_detections:
+            url = "https://fcm.googleapis.com/fcm/send"
+
+            payload = {
+                "to": "token of user device (will add it to the UserData)",
+                "priority": "high",
+                "notification": {
+                    "title": "Bird Detected",
+                    "body": "tap to view image"
+                },
+                "data": {
+                    "url": "url of uploaded image"
+                }
+            }
+
+            headers = json.loads("notification_header.json")
+
+            response = requests.post(url, headers=headers, data=payload)
+
+            print(response.text)
 
 
 if __name__ == "__main__":
