@@ -2,13 +2,14 @@ import argparse
 import random
 from pathlib import Path
 from threading import Thread
-from typing import List, Optional, Any
+from time import sleep
+from typing import List, Optional, Any, Union
 
 import cv2
 import firebase_admin
 import numpy as np
 import pygame
-from firebase_admin import credentials, db, firestore
+from firebase_admin import credentials, db, firestore, storage
 from pygame import mixer, event
 
 USE_NETWORK = False
@@ -30,52 +31,57 @@ except ImportError:
 
 
 class VideoStream:
-    """Camera object that controls video streaming from the Picamera"""
+    """camera object that controls video streaming from the Picamera"""
 
     def __init__(self, resolution=(640, 480)):
-        # Initialize the PiCamera and the camera image stream
+        # initialize the PiCamera and the camera image stream
         print("setting up cv2 video, this takes ~5 seconds...")
         self.stream = cv2.VideoCapture(0)
         self.stream.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.stream.set(3, resolution[0])
         self.stream.set(4, resolution[1])
 
-        # Read first frame from the stream
+        # read first frame from the stream
         (self.grabbed, self.frame) = self.stream.read()
 
-        # Variable to control when the camera is stopped
+        # variable to control when the camera is stopped
         self.stopped = False
 
     def start(self):
-        # Start the thread that reads frames from the video stream
+        # start the thread that reads frames from the video stream
         Thread(target=self.update, args=()).start()
         return self
 
     def update(self):
-        # Keep looping indefinitely until the thread is stopped
+        # keep looping indefinitely until the thread is stopped
         while True:
-            # If the camera is stopped, stop the thread
+            # if the camera is stopped, stop the thread
             if self.stopped:
-                # Close camera resources
+                # close camera resources
                 self.stream.release()
                 return
 
-            # Otherwise, grab the next frame from the stream
+            # otherwise, grab the next frame from the stream
             (self.grabbed, self.frame) = self.stream.read()
 
     def read(self):
-        # Return the most recent frame
+        # return the most recent frame
         return self.frame
 
     def stop(self):
-        # Indicate that the camera and thread should be stopped
+        # indicate that the camera and thread should be stopped
         self.stopped = True
 
 
 class SoundLibrary:
     SOUNDS_PATH = Path(__file__).parent / "sounds"
+    MUSIC_END_EVENT = pygame.USEREVENT + 1
 
     def __init__(self):
+        pygame.init()
+        mixer.init()
+        mixer.music.set_endevent(self.MUSIC_END_EVENT)
+
         self.owl_call = self.SOUNDS_PATH / "owl_call.mp3"
         self.owl_hoot = self.SOUNDS_PATH / "owl_hoot.mp3"
         self.owl_screech = self.SOUNDS_PATH / "owl_screech.mp3"
@@ -89,25 +95,49 @@ class SoundLibrary:
 class ServoController:
     PWM_HZ = 50
 
+    MIN_DEGREE = 0
+    MAX_DEGREE = 180
+    DEGREE_RANGE = MAX_DEGREE - MIN_DEGREE
+    DEGREE_CENTER = MIN_DEGREE + (DEGREE_RANGE / 2)
+
+    MIN_DUTY = 2
+    MAX_DUTY = 12
+    DUTY_RANGE = MAX_DUTY - MIN_DUTY
+
+    # assuming they are divisible by each other
+    DEGREE_PER_DUTY = DEGREE_RANGE // DUTY_RANGE
+
+    SERVO_RESET = 0
+
     def __init__(self, head_pin=11, right_pin=13, left_pin=15):
         GPIO.setup(head_pin, GPIO.OUT)
         GPIO.setup(right_pin, GPIO.OUT)
         GPIO.setup(left_pin, GPIO.OUT)
 
-        # Note 11 is pin, 50 = 50Hz pulse
         self.servo_head = GPIO.PWM(head_pin, self.PWM_HZ)
         self.servo_right = GPIO.PWM(right_pin, self.PWM_HZ)
         self.servo_left = GPIO.PWM(left_pin, self.PWM_HZ)
 
-        self.servo_head.start(0)
-        self.servo_right.start(0)
-        self.servo_left.start(0)
+        self.servo_head.start(self.SERVO_RESET)
+        self.servo_right.start(self.SERVO_RESET)
+        self.servo_left.start(self.SERVO_RESET)
 
-    def move_to_degree(self, servo_name, degree):
-        if not 0 <= degree <= 180:
+        self.move_to_degree("right", self.MIN_DEGREE)
+        self.move_to_degree("left", self.DEGREE_CENTER)
+        self.move_to_degree("head", self.DEGREE_CENTER)
+
+        self.head_position = self.DEGREE_CENTER
+        self.head_direction = self.DEGREE_PER_DUTY
+
+    def degree_to_duty(self, degree: int):
+        return self.MIN_DUTY + (degree // self.DEGREE_PER_DUTY)
+
+    def move_to_degree(self, servo_name, degree: Union[float, int]):
+        degree = int(round(degree))
+        if not self.MIN_DEGREE <= degree <= self.MAX_DEGREE:
             return
 
-        duty = 2 + round(degree / 18)
+        duty = self.degree_to_duty(degree)
         if servo_name == "right":
             self.servo_right.ChangeDutyCycle(duty)
         elif servo_name == "left":
@@ -124,6 +154,23 @@ class ServoController:
     def set_head_degree(self, degree):
         self.move_to_degree("head", degree)
 
+    def rotate_head(self):
+        self.head_position += self.head_direction
+        self.set_head_degree(self.head_position)
+
+        # head reached min/max
+        if not (self.MIN_DEGREE < self.head_position < self.MAX_DEGREE):
+            self.head_direction = -self.head_direction
+
+    def flap_wings(self, times=2, sleep_time=0.5):
+        for _ in range(times):
+            self.move_to_degree("right", self.DEGREE_CENTER)
+            self.move_to_degree("left", self.MIN_DEGREE)
+            sleep(sleep_time)
+            self.move_to_degree("right", self.MIN_DEGREE)
+            self.move_to_degree("left", self.DEGREE_CENTER)
+            sleep(sleep_time)
+
 
 class BirdDetectionNetwork:
     MODEL_DIR_NAME = "Sample_TFLite_model"
@@ -133,17 +180,17 @@ class BirdDetectionNetwork:
     def __init__(self):
         cwd_path = Path.cwd()
 
-        # Path to .tflite file, and .txt file, which contain the model network and labels
+        # path to .tflite file, and .txt file, which contain the model network and labels
         self.path_to_model = cwd_path / self.MODEL_DIR_NAME / self.GRAPH_FILE_NAME
         self.path_to_labels = cwd_path / self.MODEL_DIR_NAME / self.LABELS_FILE_NAME
 
         self.labels = self.parse_labels()
 
-        # Load the Tensorflow Lite model
+        # load the Tensorflow Lite model
         self.interpreter = Interpreter(model_path=str(self.path_to_model))
         self.interpreter.allocate_tensors()
 
-        # Get model details
+        # get model details
         self.network_input = self.interpreter.get_input_details()
         self.network_output = self.interpreter.get_output_details()
         self.height = self.network_input[0]['shape'][1]
@@ -155,21 +202,19 @@ class BirdDetectionNetwork:
         self.input_std = 127.5
 
     def parse_labels(self) -> List[str]:
-        # Load the label map
+        # load the label map
         with open(self.path_to_labels, 'r') as f:
             labels = [line.strip() for line in f.readlines()]
-        # Have to do a weird fix for label map if using the COCO "starter model" from
-        # https://www.tensorflow.org/lite/models/object_detection/overview
-        # First label is '???', which has to be removed.
+        # first label is '???', which has to be removed.
         return labels[1:]
 
     def transform_video_frame(self, frame_from_cam):
-        # Acquire frame and resize to expected shape [1xHxWx3]
+        # acquire frame and resize to expected shape [1xHxWx3]
         frame = frame_from_cam.copy()
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_resized = cv2.resize(frame_rgb, (self.width, self.height))
         input_data = np.expand_dims(frame_resized, axis=0)
-        # Normalize pixel values if using a floating model (i.e. if model is non-quantized)
+        # normalize pixel values if using a floating model (i.e. if model is non-quantized)
         if self.floating_model:
             input_data = (np.float32(input_data) - self.input_mean) / self.input_std
         return frame, input_data
@@ -178,7 +223,7 @@ class BirdDetectionNetwork:
         """
         note: tensorflow_lite is optimized for ARM! super slow on windows.
         """
-        # Perform the actual detection by running the model with the image as input
+        # perform the actual detection by running the model with the image as input
         self.interpreter.set_tensor(self.network_input[0]['index'], input_data)
         self.interpreter.invoke()
 
@@ -197,10 +242,8 @@ class BigScaryOwl:
     BIRD_CONFIDENCE = 0.5
     BIRD_LABEL = "bird"
 
-    # sounds
-    MUSIC_END_EVENT = pygame.USEREVENT + 1
-
     # firebase
+    # TODO@niv: move firebase handling into separate class
     DEVICE_ID = 1
     FIREBASE_KEY_FILE_NAME = "firebase_key.json"
     DEFAULT_DB_URL = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/"}
@@ -223,9 +266,6 @@ class BigScaryOwl:
         self.sounds = SoundLibrary()
 
         # use pygame for the sound mixer
-        pygame.init()
-        mixer.init()
-        mixer.music.set_endevent(self.MUSIC_END_EVENT)
         self.playing_sound = False
 
         # frame rate calculation
@@ -243,8 +283,8 @@ class BigScaryOwl:
         firestore_client = firestore.client()
 
         self.users_db = db.reference("/users")
-        self.detections_db = db.reference("/detections")
         self.settings_db = firestore_client.collection("Owls").document(str(self.DEVICE_ID))
+        self.detections_storage = storage.bucket()
 
         # threads
         self.triggers_thread: Optional[Thread] = None
@@ -275,12 +315,14 @@ class BigScaryOwl:
             camera_frame = self.videostream.read()
             if USE_NETWORK:
                 frame, input_data = self.network.transform_video_frame(camera_frame)
+                # TODO@niv: if self.network.output_queue not empty
                 self.network.run_image_through_network(input_data)
-                if self._is_bird_detected(frame):
+                self._process_detections(frame)
+                if self._is_bird_high_certainty():
                     self._bird_detected_action()
             else:
                 frame = camera_frame
-                if self.frame_count % 100 == 0:
+                if self.frame_count % 500 == 0:
                     self._bird_detected_action()
 
             self.show_frame(frame)
@@ -289,6 +331,8 @@ class BigScaryOwl:
             self.triggers_thread.start()
             # TODO@niv: move this to thread as well
             self.check_settings_changed()
+            if not self.fixed_head:
+                self.rotate_head()
 
             # Press 'q' to quit
             if cv2.waitKey(1) == ord('q'):
@@ -314,17 +358,14 @@ class BigScaryOwl:
         self.loop_ticks = cv2.getTickCount()
 
     def show_frame(self, frame):
-        # Draw framerate in corner of frame
+        # draw framerate in corner of frame
         cv2.putText(frame, 'FPS: {0:.2f}'.format(self.frame_rate_calc), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
-        # All the results have been drawn on the frame, so it's time to display it.
         cv2.imshow('Object detector', frame)
 
-    def _is_bird_detected(self, frame):
-        is_action_needed = False
+    def _process_detections(self, frame):
         boxes, classes, scores = self.network.get_detection_results()
 
-        # Loop over all detections and draw detection box if confidence is above minimum threshold
-        is_saw_bird = False
+        # loop over all detections and draw detection box if confidence is above minimum threshold
         best_bird_score = 0
         for detection_id in range(len(scores)):
             curr_confidence = scores[detection_id]
@@ -334,18 +375,17 @@ class BigScaryOwl:
                 self.draw_detection(boxes, curr_label, frame, detection_id, scores)
 
             if curr_label == self.BIRD_LABEL:
-                is_saw_bird = True
                 best_bird_score = max(best_bird_score, curr_confidence)
-                is_action_needed = self._is_bird_high_certainty(curr_confidence)
 
-        if is_saw_bird:
-            self.bird_detection_scores.append(best_bird_score)
+        self.bird_detection_scores.append(best_bird_score)
 
-        return is_action_needed
+    def _is_bird_high_certainty(self, num_scores=3):
+        # look at the previous `num_scores` scores, and based on their average, decide if a bird was detected
+        if len(self.bird_detection_scores) > num_scores:
+            if sum(self.bird_detection_scores[-num_scores:]) / num_scores > self.BIRD_CONFIDENCE:
+                return True
 
-    def _is_bird_high_certainty(self, curr_confidence):
-        # TODO@niv: if len(self.bird_detection_scores) > 3 and ...
-        return curr_confidence > self.BIRD_CONFIDENCE
+        return False
 
     def _bird_detected_action(self):
         # self._play_sound_action(self.sounds.random_sound())
@@ -354,11 +394,12 @@ class BigScaryOwl:
         print(f"frames={self.frame_count}")
 
     def _play_sound_action(self, sound_file_name=None):
+        # TODO@niv: move this into sounds library
         if sound_file_name is None:
             sound_file_name = self.sounds.owl_screech
 
         for e in event.get():
-            if e.type == self.MUSIC_END_EVENT:
+            if e.type == self.sounds.MUSIC_END_EVENT:
                 self.playing_sound = False
 
         if (not self.playing_sound) and (not self.muted):
@@ -383,13 +424,13 @@ class BigScaryOwl:
         xmax = int(min(self.im_width, (boxes[i][3] * self.im_width)))
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (10, 255, 0), 2)
 
-        # Example: 'person: 72%'
+        # example: 'person: 72%'
         label = '%s: %d%%' % (object_name, int(scores[i] * 100))
-        # Get font size
+        # get font size
         label_size, base_line = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-        # Make sure not to draw label too close to top of window
+        # make sure not to draw label too close to top of window
         label_ymin = max(ymin, label_size[1] + 10)
-        # Draw white box to put label text in
+        # draw white box to put label text in
         cv2.rectangle(frame, (xmin, label_ymin - label_size[1] - 10), (xmin + label_size[0], label_ymin + base_line - 10), (255, 255, 255), cv2.FILLED)
         cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)  # Draw label text
 
@@ -437,12 +478,11 @@ class BigScaryOwl:
         mixer.music.stop()
 
     def _flap_wings_action(self):
-        pass
+        self.servo_motors.flap_wings()
 
-    def _go_next_head_position(self):
-        # use self.curr_head_position/duty or something
+    def rotate_head(self):
         if (not self.fixed_head) and (GPIO is not None):
-            self.servo_motors.set_head_degree()
+            self.servo_motors.rotate_head()
 
     def _run_command(self, command_type: str):
         if command_type == "Trigger Alarm":
