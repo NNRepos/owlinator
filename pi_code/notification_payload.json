@@ -1,0 +1,11 @@
+{
+  "to": "token of user device (will add it to the UserData)",
+  "priority": "high",
+  "notification": {
+    "title": "Bird Detected",
+    "body": "tap to view image"
+  },
+  "data": {
+    "url": "url of uploaded image"
+  }
+}

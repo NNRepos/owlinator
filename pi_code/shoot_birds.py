@@ -16,7 +16,7 @@ from PIL import Image
 from firebase_admin import credentials, db, firestore, storage
 from pygame import mixer, event
 
-USE_NETWORK = False
+USE_NETWORK = True
 
 if USE_NETWORK:
     try:
@@ -77,7 +77,7 @@ class VideoStream:
         self.stopped = True
 
 
-class SoundLibrary:
+class SoundPlayer:
     SOUNDS_PATH = Path(__file__).parent / "sounds"
     MUSIC_END_EVENT = pygame.USEREVENT + 1
 
@@ -254,6 +254,11 @@ class BirdDetectionNetwork:
         self.input_mean = 127.5
         self.input_std = 127.5
 
+        # thread input and output
+        self.input_frame = None
+        self.output_detection_results = None
+        self.is_busy = False
+
     def parse_labels(self) -> List[str]:
         # load the label map
         with open(self.path_to_labels, 'r') as f:
@@ -277,10 +282,13 @@ class BirdDetectionNetwork:
         note: tensorflow_lite is optimized for ARM! super slow on windows.
         """
         # perform the actual detection by running the model with the image as input
+        self.is_busy = True
         self.interpreter.set_tensor(self.network_input[0]['index'], input_data)
         self.interpreter.invoke()
+        self.output_detection_results = self.get_last_detection_results()
+        self.is_busy = False
 
-    def get_detection_results(self):
+    def get_last_detection_results(self):
         boxes = self.interpreter.get_tensor(self.network_output[0]['index'])[0]
         classes = self.interpreter.get_tensor(self.network_output[1]['index'])[0]
         scores = self.interpreter.get_tensor(self.network_output[2]['index'])[0]
@@ -302,8 +310,13 @@ class BigScaryOwl:
     DEFAULT_DB_URLS = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/",
                        "storageBucket": "taken-images"}
 
+    # notifications
+    HEADERS_FILE_PATH = Path("notification_header.json")
+    PAYLOAD_FILE_PATH = Path("notification_payload.json")
+
     def __init__(self):
         self.bird_detection_scores: List = []
+
         args = self._get_input_arguments()
         self.min_confidence_threshold = float(args.threshold)
         self.im_width, self.im_height = [int(val) for val in args.resolution.split('x')]
@@ -313,23 +326,26 @@ class BigScaryOwl:
             self.network = BirdDetectionNetwork()
             self.network_input = None
             self.network_output = None
+            self.network_loop_ticks = 0
+            self.network_fps = 0.0
 
         # servo motor
         self.servo_motors = ServoController(head_pin=args.headpin, right_pin=args.rightpin, left_pin=args.leftpin)
 
         # sounds
-        self.sounds = SoundLibrary()
+        self.mp3 = SoundPlayer()
 
         # frame rate calculation
         self.loop_ticks = 0
         self.frame_count = 0
-        self.frame_rate_calc = 0.0
+        self.livestream_fps = 0.0
         self.freq = cv2.getTickFrequency()
 
         # video stream
         self.videostream = VideoStream(resolution=(self.im_width, self.im_height)).start()
 
         # initalize firebase app
+        # self.firebase = FireBaseManager
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
         firebase_admin.initialize_app(cred, self.DEFAULT_DB_URLS)
         firestore_client = firestore.client()
@@ -344,10 +360,11 @@ class BigScaryOwl:
         self.upload_image_thread: Optional[Thread] = None
         self.network_forward_thread: Optional[Thread] = None
         self.flap_wings_thread: Optional[Thread] = None
+        self.notify_thread: Optional[Thread] = None
 
         # settings
         self.uploads_detections = False
-        self.notifies_detections = True
+        self.notifies_detections = False
 
     @staticmethod
     def _get_input_arguments():
@@ -367,24 +384,13 @@ class BigScaryOwl:
             self._update_ticks()
 
             camera_frame = self.videostream.read()
-            if USE_NETWORK:
-                frame, input_data = self.network.transform_video_frame(camera_frame)
-                # TODO@niv: if not self.network_busy:
-                #  process detections
-                #  run image thread (includes network=busy)
-                self.network.run_image_through_network(input_data)
-                self._process_detections(frame)
-                if self._is_bird_high_certainty():
-                    self._bird_detected_action(frame)
-            else:
-                frame = camera_frame
-                if self.frame_count % 500 == 0:
-                    self._bird_detected_action(frame)
+            livestream_frame = self._handle_frame_and_network(camera_frame)
 
-            self.show_frame(frame)
+            self.show_frame(livestream_frame)
 
             self.triggers_thread = Thread(target=self.check_realtime_triggers)
             self.triggers_thread.start()
+
             self.settings_thread = Thread(target=self.check_settings_changed)
             self.settings_thread.start()
 
@@ -394,6 +400,37 @@ class BigScaryOwl:
                 break
 
         self._clean_up()
+
+    def _handle_frame_and_network(self, camera_frame):
+        if USE_NETWORK:
+            livestream_frame, input_data = self.network.transform_video_frame(camera_frame)
+            detections = self.network.output_detection_results
+
+            if self.network.is_busy:
+                if detections is not None:
+                    self._draw_confident_detections(livestream_frame, detections)
+            else:
+                self._update_network_ticks()
+                # give network new input
+                network_input_frame = livestream_frame.copy()
+                self.network.input_frame = network_input_frame
+
+                if detections is not None:
+                    # a detection was complete, we need to analyze its results
+                    self._save_detection_score(detections)
+                    self._draw_confident_detections(livestream_frame, detections)
+                    uploaded_frame = livestream_frame.copy()
+                    if self._is_bird_high_confidence():
+                        self._bird_detected_action(uploaded_frame)
+
+                self.network_forward_thread = Thread(target=self.network.run_image_through_network, args=(input_data,))
+                self.network_forward_thread.start()
+
+        else:
+            livestream_frame = camera_frame
+            if self.frame_count % 500 == 0:
+                self._bird_detected_action(livestream_frame)
+        return livestream_frame
 
     def _clean_up(self):
         print("cleaning up, please wait...")
@@ -408,33 +445,49 @@ class BigScaryOwl:
             t1 = self.loop_ticks
             t2 = cv2.getTickCount()
             time_delta = (t2 - t1) / self.freq
-            self.frame_rate_calc = 1 / time_delta
+            self.livestream_fps = 1 / time_delta
             self.frame_count += 1
         self.loop_ticks = cv2.getTickCount()
 
+    def _update_network_ticks(self):
+        if self.network_loop_ticks > 0:
+            t1 = self.network_loop_ticks
+            t2 = cv2.getTickCount()
+            time_delta = (t2 - t1) / self.freq
+            self.network_fps = 1 / time_delta
+        self.network_loop_ticks = cv2.getTickCount()
+
     def show_frame(self, frame):
         # draw framerate in corner of frame
-        cv2.putText(frame, 'FPS: {0:.2f}'.format(self.frame_rate_calc), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, 'LFPS: {0:.2f}'.format(self.livestream_fps), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, 'NFPS: {0:.2f}'.format(self.network_fps), (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.imshow('Object detector', frame)
 
-    def _process_detections(self, frame):
-        boxes, classes, scores = self.network.get_detection_results()
+    def _draw_confident_detections(self, frame, detection_results):
+        boxes, classes, scores = detection_results
 
         # loop over all detections and draw detection box if confidence is above minimum threshold
-        best_bird_score = 0
         for detection_id in range(len(scores)):
             curr_confidence = scores[detection_id]
             curr_label = self.network.get_label(classes[detection_id])
 
             if (curr_confidence > self.min_confidence_threshold) and (curr_confidence <= 1.0):
-                self.draw_detection(boxes, curr_label, frame, detection_id, scores)
+                self._draw_detection(boxes, curr_label, frame, detection_id, scores)
+
+    def _save_detection_score(self, detection_results):
+        boxes, classes, scores = detection_results
+
+        best_bird_score = 0
+        for detection_id in range(len(scores)):
+            curr_confidence = scores[detection_id]
+            curr_label = self.network.get_label(classes[detection_id])
 
             if curr_label == self.BIRD_LABEL:
                 best_bird_score = max(best_bird_score, curr_confidence)
 
         self.bird_detection_scores.append(best_bird_score)
 
-    def _is_bird_high_certainty(self, num_scores=3):
+    def _is_bird_high_confidence(self, num_scores=3):
         # look at the previous `num_scores` scores, and based on their average, decide if a bird was detected
         if len(self.bird_detection_scores) > num_scores:
             if sum(self.bird_detection_scores[-num_scores:]) / num_scores > self.BIRD_CONFIDENCE:
@@ -443,7 +496,7 @@ class BigScaryOwl:
         return False
 
     def _bird_detected_action(self, frame):
-        self._play_sound_action(self.sounds.random_sound())
+        self._play_sound_action(self.mp3.random_sound())
         self._flap_wings_action()
         self._save_frame_action(frame)
         self._notify_detection_action()
@@ -452,11 +505,11 @@ class BigScaryOwl:
 
     def _play_sound_action(self, sound_file_name=None):
         if sound_file_name is None:
-            sound_file_name = self.sounds.owl_screech
+            sound_file_name = self.mp3.owl_screech
 
-        self.sounds.play_sound(sound_file_name=sound_file_name)
+        self.mp3.play_sound(sound_file_name=sound_file_name)
 
-    def draw_detection(self, boxes, object_name, frame, i, scores):
+    def _draw_detection(self, boxes, object_name, frame, i, scores):
         # get bounding box coordinates and draw box
         # interpreter can return coordinates that are outside of image dimensions, need to force them to be within image using max() and min()
         ymin = int(max(1, (boxes[i][0] * self.im_height)))
@@ -497,23 +550,22 @@ class BigScaryOwl:
 
     def check_settings_changed(self):
         settings = self.settings_db.get().to_dict()["settings"]
-        self.sounds.muted = settings["mute"]
+        self.mp3.muted = settings["mute"]
         self.notifies_detections = settings["notify"]
         self.servo_motors.fixed_head = settings["fixedHead"]
-        if not self.sounds.muted:
-            self.sounds.change_volume_setting(settings["volume"] / 100)
+        if not self.mp3.muted:
+            self.mp3.change_volume_setting(settings["volume"] / 100)
 
         if self.servo_motors.fixed_head and GPIO is not None:
             self.servo_motors.set_head_degree(settings["angle"])
 
     @property
     def all_threads(self):
-        # TODO@niv: all threads
         return [self.triggers_thread, self.settings_thread, self.upload_image_thread,
-                self.network_forward_thread, self.flap_wings_thread]
+                self.network_forward_thread, self.flap_wings_thread, self.notify_thread]
 
     def kill_all_threads(self):
-        self.sounds.stop_music()
+        self.mp3.stop_music()
 
         for thread in self.all_threads:
             if thread:
@@ -528,7 +580,7 @@ class BigScaryOwl:
         if command_type == "Trigger Alarm":
             self._play_sound_action()
         elif command_type == "Stop Alarm":
-            self.sounds.stop_music()
+            self.mp3.stop_music()
 
     def _save_frame_action(self, frame):
         if self.uploads_detections:
@@ -553,25 +605,18 @@ class BigScaryOwl:
         return timestamp
 
     def _notify_detection_action(self):
-        # TODO@niv
+        # TODO@niv: get id and url, self.notify_thread
         if self.notifies_detections:
             url = "https://fcm.googleapis.com/fcm/send"
 
-            payload = {
-                "to": "token of user device (will add it to the UserData)",
-                "priority": "high",
-                "notification": {
-                    "title": "Bird Detected",
-                    "body": "tap to view image"
-                },
-                "data": {
-                    "url": "url of uploaded image"
-                }
-            }
+            payload = json.loads(self.PAYLOAD_FILE_PATH.read_text())
+            payload["data"]["url"] = 1
+            payload["to"] = 2
+            payload_json = json.dumps(payload)
 
-            headers = json.loads("notification_header.json")
+            headers_json = self.HEADERS_FILE_PATH.read_text()
 
-            response = requests.post(url, headers=headers, data=payload)
+            response = requests.post(url, headers=headers_json, data=payload_json)
 
             print(response.text)
 
