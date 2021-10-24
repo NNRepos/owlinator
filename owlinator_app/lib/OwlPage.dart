@@ -250,7 +250,7 @@ class _OwlPageState extends State<OwlPage> {
       double confidence = double.parse(
           regex.firstMatch(decomp[1])!.group(0)!);
       urls.add(<String, dynamic>{'url': url, 'confidence': confidence, 'date': " ${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute}", 'Date': date});
-      urls.sort((a,b) => -(a['date'] as String).compareTo((b['date'] as String)));
+      urls.sort((a,b) => -(a['Date'] as DateTime).compareTo((b['Date'] as DateTime)));
     });
 
     return urls;
