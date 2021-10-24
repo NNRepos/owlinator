@@ -116,10 +116,11 @@ class SoundPlayer:
 
     @staticmethod
     def change_volume_setting(volume=0.2):
-        if not 0 <= volume <= 1:
+        volume = round(volume, ndigits=2)
+        if 0 <= volume <= 1:
             pygame.mixer.music.set_volume(volume)
         else:
-            print("got illegal volume, skipping command")
+            print(f"got illegal volume = {volume}, skipping command")
 
 
 def _run_if_gpio(func):
@@ -182,7 +183,7 @@ class ServoController:
     def move_to_degree(self, servo_name, degree: Union[float, int]):
         degree = int(round(degree))
         if not self.MIN_DEGREE <= degree <= self.MAX_DEGREE:
-            print("got illegal motor degree, skipping command")
+            print(f"got illegal motor degree = {degree}, skipping command")
             return
 
         duty = self.degree_to_duty(degree)
@@ -298,6 +299,10 @@ class BirdDetectionNetwork:
         return self.labels[int(label_id)]
 
 
+class FirebaseManager:
+    pass
+
+
 class BigScaryOwl:
     # detections
     BIRD_CONFIDENCE = 0.5
@@ -305,10 +310,11 @@ class BigScaryOwl:
 
     # firebase
     # TODO@niv: move firebase handling into separate class
-    DEVICE_ID = 1
+    DEVICE_ID = 4
     FIREBASE_KEY_FILE_NAME = "firebase_key.json"
+    STORAGE_BUCKET_NAME = "taken-images"
     DEFAULT_DB_URLS = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/",
-                       "storageBucket": "taken-images"}
+                       "storageBucket": STORAGE_BUCKET_NAME}
 
     # notifications
     HEADERS_FILE_PATH = Path("notification_header.json")
@@ -345,13 +351,18 @@ class BigScaryOwl:
         self.videostream = VideoStream(resolution=(self.im_width, self.im_height)).start()
 
         # initalize firebase app
-        # self.firebase = FireBaseManager
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
         firebase_admin.initialize_app(cred, self.DEFAULT_DB_URLS)
         firestore_client = firestore.client()
 
-        self.users_db = db.reference("/users")
+        self.user_commands_db = db.reference("/users")
+
         self.settings_db = firestore_client.collection("Owls").document(str(self.DEVICE_ID))
+
+        settings = self.settings_db.get().to_dict()["settings"]
+        my_user_id = settings["assicatedUid"]
+        self.user_data_db = firestore_client.collection("UserData").document(my_user_id)
+
         self.detections_storage = storage.bucket()
 
         # threads
@@ -363,7 +374,6 @@ class BigScaryOwl:
         self.notify_thread: Optional[Thread] = None
 
         # settings
-        self.uploads_detections = False
         self.notifies_detections = False
 
     @staticmethod
@@ -418,7 +428,7 @@ class BigScaryOwl:
                 if detections is not None:
                     # a detection was complete, we need to analyze its results
                     self._save_detection_score(detections)
-                    self._draw_confident_detections(livestream_frame, detections)
+                    # self._draw_confident_detections(livestream_frame, detections)
                     uploaded_frame = livestream_frame.copy()
                     if self._is_bird_high_confidence():
                         self._bird_detected_action(uploaded_frame)
@@ -533,7 +543,7 @@ class BigScaryOwl:
         this takes about half a second, depending on internet speed
         """
         my_device = self.DEVICE_ID
-        all_users = self.users_db.get("")
+        all_users = self.user_commands_db.get("")
         assert isinstance(all_users, dict)
 
         for user in all_users:
@@ -546,7 +556,7 @@ class BigScaryOwl:
                         self._run_command(command_type)
                         my_device_commands[command]["applied"] = "true"
 
-        self.users_db.set(all_users)
+        self.user_commands_db.set(all_users)
 
     def check_settings_changed(self):
         settings = self.settings_db.get().to_dict()["settings"]
@@ -583,19 +593,28 @@ class BigScaryOwl:
             self.mp3.stop_music()
 
     def _save_frame_action(self, frame):
-        if self.uploads_detections:
-            timestamp = self._get_timestamp()
-            frame_image = Image.fromarray(frame)
-            confidence = (self.bird_detection_scores[-1] * 100) if USE_NETWORK else 0
-            full_image_name = f"{timestamp}_{self.DEVICE_ID}_{confidence}.jpg"
-            full_image_path = str(Path("images") / full_image_name)
-            self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_image_name, full_image_path))
-            self.upload_image_thread.start()
+        timestamp = self._get_timestamp()
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_image = Image.fromarray(frame_rgb)
+        confidence = (self.bird_detection_scores[-1] * 100) if USE_NETWORK else 0
+        full_image_name = f"{timestamp}_{self.DEVICE_ID}_{confidence}.jpg"
+        full_image_path = str(Path("images") / full_image_name)
+
+        self.last_image_uploaded_url = None
+        self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_image_name, full_image_path))
+        self.upload_image_thread.start()
 
     def _upload_frame_image(self, frame_image, full_image_name, full_image_path):
         frame_image.save(full_image_path)
+
+        print("uploading image to storage")
         my_new_blob = self.detections_storage.blob(full_image_name)
         my_new_blob.upload_from_filename(filename=full_image_path, content_type="image/jpg")
+        fake_url = my_new_blob.public_url
+        real_url = (fake_url.replace(f"storage.googleapis.com/{self.STORAGE_BUCKET_NAME}/",
+                                     f"firebasestorage.googleapis.com/v0/b/{self.STORAGE_BUCKET_NAME}/o/")) + "?alt=media"
+
+        self.last_image_uploaded_url = real_url
 
     @staticmethod
     def _get_timestamp():
@@ -605,20 +624,24 @@ class BigScaryOwl:
         return timestamp
 
     def _notify_detection_action(self):
-        # TODO@niv: get id and url, self.notify_thread
+        # TODO@niv: make this a thread
         if self.notifies_detections:
+            while self.last_image_uploaded_url is None:
+                # wait for image to be uploaded
+                sleep(1)
+
             url = "https://fcm.googleapis.com/fcm/send"
 
             payload = json.loads(self.PAYLOAD_FILE_PATH.read_text())
-            payload["data"]["url"] = 1
-            payload["to"] = 2
+            payload["data"]["url"] = self.last_image_uploaded_url
+            payload["to"] = self.user_data_db.get().to_dict()["notificationToken"]
             payload_json = json.dumps(payload)
 
-            headers_json = self.HEADERS_FILE_PATH.read_text()
+            headers_dict = json.loads(self.HEADERS_FILE_PATH.read_text())
 
-            response = requests.post(url, headers=headers_json, data=payload_json)
+            response = requests.post(url, headers=headers_dict, data=payload_json)
 
-            print(response.text)
+            print(f"notification response: {response.text}")
 
 
 if __name__ == "__main__":
