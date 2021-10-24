@@ -71,7 +71,7 @@ class PushNotificationService {
                 ])),
             position: NotificationPosition.top,
             background: Colors.lightBlueAccent,
-            slideDismiss: true
+            slideDismissDirection: DismissDirection.up
         );
       }
     });
