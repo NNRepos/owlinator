@@ -256,6 +256,112 @@ class _OwlPageState extends State<OwlPage> {
     return urls;
   }
 
+  Widget DetectionTab() {
+    Widget noImagesWidget = Center(child: Text("There are no detections", style: TextStyle(fontSize: 30)));
+    Widget errorWidget =
+        Center(child: Text("There was an error while retrieving detections", style: TextStyle(fontSize: 30)));
+    return FutureBuilder<List<Map<String, dynamic>>>(
+        future: imageUrls,
+        builder: (BuildContext context,
+            AsyncSnapshot<List<Map<String, dynamic>>> snapshot) {
+          if (snapshot.connectionState == ConnectionState.done) {
+            if (snapshot.hasError) {
+              print(snapshot.error);
+              return errorWidget;
+            }
+            if (snapshot.hasData) {
+              return snapshot.data!.length == 0
+                  ? noImagesWidget
+                  : GridView.builder(
+                      primary: true,
+                      padding: const EdgeInsets.all(20),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2),
+                      shrinkWrap: false,
+                      itemCount: snapshot.data!.length,
+                      itemBuilder: (BuildContext context, int index) {
+                        return Container(
+
+                          child: Column(children: [
+                            Container(
+                                padding: const EdgeInsets.fromLTRB(0, 0, 0, 10),
+                                width: 200.0,
+                                height: 165.0,
+                                child:
+                                    Image.network(snapshot.data![index]['url']! as String,
+                                        loadingBuilder: (BuildContext context,
+                                            Widget child,
+                                            ImageChunkEvent? loadingProgress) {
+                                  if (loadingProgress == null) return child;
+                                  return Center(
+                                    child: CircularProgressIndicator(
+                                      value:
+                                          loadingProgress.expectedTotalBytes !=
+                                                  null
+                                              ? loadingProgress
+                                                      .cumulativeBytesLoaded /
+                                                  loadingProgress
+                                                      .expectedTotalBytes!
+                                              : null,
+                                    ),
+                                  );
+                                },
+                                        fit: BoxFit.cover,
+                                        width: 200.0,
+                                        height: 165.0)),
+                            Row(
+
+                              children: [
+                                Text(
+                                    snapshot.data![index]['date']! as String,
+                                    style: TextStyle(fontSize: 10)),
+                                Text("Confidence: ${(snapshot.data![index]['confidence']! as double) * 100}%  ",
+                                    style: TextStyle(fontSize: 10))
+                              ],
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            )
+                          ]),
+
+                        );
+                      });
+            } else {
+              return noImagesWidget;
+            }
+          } else {
+            return Center(child: CircularProgressIndicator());
+          }
+        });
+  }
+
+  Future<List<Map<String, dynamic>>> _getImageUrls() async {
+    firebase_storage.ListResult allImages =
+        await storage.ref(widget.device.id).listAll();
+    List<Map<String, dynamic>> urls = [];
+    allImages.items.forEach((firebase_storage.Reference ref) async {
+      String url = await ref.getDownloadURL();
+      List<String> decomp = ref.name.split("_");
+      List<int> dateParts = decomp[0]
+          .split("-")
+          .map((e) => int.parse(e))
+          .toList();
+      DateTime date = DateTime(
+          dateParts[0],
+          dateParts[1],
+          dateParts[2],
+          dateParts[3],
+          dateParts[4],
+          dateParts[5]);
+      var regex = RegExp(r'\d*.?\d{1,2}');
+      double confidence = double.parse(
+          regex.firstMatch(decomp[1])!.group(0)!);
+      urls.add(<String, dynamic>{'url': url, 'confidence': confidence, 'date': " ${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute}", 'Date': date});
+      urls.sort((a,b) => -(a['Date'] as DateTime).compareTo((b['Date'] as DateTime)));
+    });
+
+    return urls;
+  }
+
   Widget SettingsTab() {
     return SettingsList(
       sections: [
