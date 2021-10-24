@@ -39,7 +39,9 @@ class _OwlPageState extends State<OwlPage> {
     List<Widget> _widgetOptions = <Widget>[OwlsTabs(), SettingsTab()];
     getSettingsQuery(widget.device.id).then((result) {
       setState(() {
-        settings = result!;
+        if (this.mounted) {
+          settings = result!;
+        }
       });
     });
 
@@ -59,7 +61,9 @@ class _OwlPageState extends State<OwlPage> {
       currentIndex: _selectedIndex,
       onTap: (value) {
         setState(() {
-          _selectedIndex = value;
+          if (this.mounted) {
+            _selectedIndex = value;
+          }
         });
       },
       items: [
@@ -76,7 +80,7 @@ class _OwlPageState extends State<OwlPage> {
     Command command =
         Command(widget.device.id, DateTime.now(), commandName, false);
     commandDao.sendCommand(command, widget.device);
-    setState(() {});
+    //setState(() {});
   }
 
   Widget OwlsTabs() {
@@ -92,8 +96,10 @@ class _OwlPageState extends State<OwlPage> {
           return InkWell(
               onTap: () {
                 sendCommand(commandName);
-                ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Executing ' + commandName)));
+                if(this.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Executing ' + commandName)));
+                }
               },
               child: Container(
                   padding: EdgeInsets.all(10),
@@ -166,8 +172,10 @@ class _OwlPageState extends State<OwlPage> {
                 settings.mute == true ? Icons.volume_off : Icons.volume_up),
             onToggle: (bool value) {
               setState(() {
-                settings.mute = value;
-                updateSettings(settings);
+                if (this.mounted) {
+                  settings.mute = value;
+                  updateSettings(settings);
+                }
               });
             },
             switchValue: settings.mute,
@@ -195,8 +203,10 @@ class _OwlPageState extends State<OwlPage> {
                       ? null
                       : (double value) {
                           setState(() {
-                            settings.volume = value;
-                            updateSettings(settings);
+                            if (this.mounted) {
+                              settings.volume = value;
+                              updateSettings(settings);
+                            }
                           });
                         })),
           Container(
@@ -212,8 +222,10 @@ class _OwlPageState extends State<OwlPage> {
                     : Icons.rotate_left),
                 onToggle: (bool value) {
                   setState(() {
-                    settings.fixedHead = value;
-                    updateSettings(settings);
+                    if (this.mounted) {
+                      settings.fixedHead = value;
+                      updateSettings(settings);
+                    }
                   });
                 },
                 switchValue: settings.fixedHead,
@@ -237,8 +249,10 @@ class _OwlPageState extends State<OwlPage> {
                       ? null
                       : (double value) {
                           setState(() {
-                            settings.angle = value;
-                            updateSettings(settings);
+                            if (this.mounted) {
+                              settings.angle = value;
+                              updateSettings(settings);
+                            }
                           });
                         })),
           SettingsTile.switchTile(
@@ -307,7 +321,8 @@ class _OwlPageState extends State<OwlPage> {
                     Device newDevice = Device(widget.device.id, newName);
                     if (newName.isNotEmpty) {
                       List<Device> currentDevices = userData.devices;
-                      final index = currentDevices.indexWhere((element) => element.id == widget.device.id);
+                      final index = currentDevices.indexWhere(
+                          (element) => element.id == widget.device.id);
                       currentDevices.removeAt(index);
                       List<Device> newDevices = [
                         ...(currentDevices),
@@ -326,8 +341,10 @@ class _OwlPageState extends State<OwlPage> {
                       }, SetOptions(merge: true));
 
                       setState(() {
-                        deviceName = newName;
-                        settings.device.name = newName;
+                        if (this.mounted) {
+                          deviceName = newName;
+                          settings.device.name = newName;
+                        }
                       });
                       updateSettings(settings);
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

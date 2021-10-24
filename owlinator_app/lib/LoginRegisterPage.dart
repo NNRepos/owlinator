@@ -5,9 +5,10 @@ import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'Authentication.dart';
 
 class LoginRegisterPage extends StatefulWidget {
-  LoginRegisterPage({required this.auth, required this.onSignedIn});
+  LoginRegisterPage({required this.auth, required this.onSignedIn, required this.token});
   final AuthImplementation auth;
   final VoidCallback onSignedIn;
+  final String? token;
 
   @override
   _LoginRegisterPageState createState() => _LoginRegisterPageState();
@@ -52,7 +53,8 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
             'firstName': _firstName,
             'lastName': _lastName,
             'email': _email,
-            'uid': userId
+            'uid': userId,
+            'notificationToken': widget.token ?? ''
           };
           await _firestore.collection('UserData').doc(userId).set(userData);
           print("userId: " + userId + " sign up");

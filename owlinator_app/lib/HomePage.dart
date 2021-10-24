@@ -12,10 +12,11 @@ import 'data/OwlSettingsDao.dart';
 
 class HomePage extends StatefulWidget {
   HomePage(
-      {required this.auth, required this.firestore, required this.onSignedOut});
+      {required this.auth, required this.firestore, required this.onSignedOut, required this.token});
   final AuthImplementation auth;
   final VoidCallback onSignedOut;
   final FirebaseFirestore firestore;
+  final String? token;
 
   @override
   _HomePageState createState() => _HomePageState();
@@ -135,7 +136,9 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: buildAppBar(),
-      body: Center(child: _widgetOptions.elementAt(_selectedIndex)),
+      body: RefreshIndicator(
+      onRefresh: _updateDeviceList,
+      child:Center(child: _widgetOptions.elementAt(_selectedIndex))),
       bottomNavigationBar: buildBottomNavigationBar(),
       floatingActionButton: _selectedIndex == 1 ? null : FloatingActionButton(
           child: Icon(Icons.add),
@@ -183,7 +186,7 @@ class _HomePageState extends State<HomePage> {
         ],
       );
 
-  void _updateDeviceList() async {
+  Future<void> _updateDeviceList() async {
     User? user = await widget.auth.getCurrentUser();
     if (user != null) {
       await widget.firestore
@@ -198,6 +201,11 @@ class _HomePageState extends State<HomePage> {
           });
         }
       });
+      if(widget.token != null && (_userData.notificationToken != widget.token ||_userData.notificationToken== null)){
+        print("Updated notification Token");
+        await FirebaseFirestore.instance.collection('UserData').doc(_userData.uid).set(
+            <String, String>{'notificationToken': widget.token!}, SetOptions(merge: true));
+      }
     }
   }
 

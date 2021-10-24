@@ -6,9 +6,11 @@ import 'LoginRegisterPage.dart';
 
 class MappingPage extends StatefulWidget {
   final AuthImplementation auth;
+  final String? token;
 
   MappingPage({
     required this.auth,
+    this.token
   });
 
   @override
@@ -50,12 +52,14 @@ class _MappingPageState extends State<MappingPage> {
         return new LoginRegisterPage(
           auth: widget.auth,
           onSignedIn: _signedIn,
+          token: widget.token
         );
       case AuthStatus.signedIn:
         return new HomePage(
           auth: widget.auth,
           onSignedOut: _signedOut,
           firestore: FirebaseFirestore.instance,
+          token: widget.token
         );
     }
   }

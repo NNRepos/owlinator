@@ -18,15 +18,15 @@ Future<void> main() async {
   });
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final pushNotificationService = PushNotificationService(_firebaseMessaging);
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  pushNotificationService.initialise();
+   pushNotificationService.initialise();
   print("Firebase Messaging Initialization Completed");
-  runApp(App());
+  String? token = await _firebaseMessaging.getToken();
+  runApp(App(token));
 }
 
 class App extends StatelessWidget {
-  const App({Key? key}) : super(key: key);
-
+  const App(this.token, {Key? key}) : super(key: key);
+  final String? token;
   @override
   Widget build(BuildContext context) {
     return OverlaySupport.global(
@@ -36,53 +36,8 @@ class App extends StatelessWidget {
       theme: ThemeData(
           primarySwatch: Colors.red,
           visualDensity: VisualDensity.adaptivePlatformDensity),
-      home: MappingPage(auth: Auth()),
+      home: MappingPage(auth: Auth(), token: token),
       builder: EasyLoading.init(),
     ));
-  }
-}
-
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print('Got a message whilst in the background!');
-
-  if (message.notification != null) {
-    var notification = PushNotificationMessage(
-        title: message.notification!.title!,
-        body: message.notification!.body!,
-        imageUrl: (message.data["url"] != null
-            ? message.data["url"] as String?
-            : (Platform.isAndroid
-                ? message.notification!.android!.imageUrl
-                : message.notification!.apple!.imageUrl)));
-
-    print('Message notification: \n'
-        'title: ${notification.title}\n'
-        'body: ${notification.body}\n'
-        'imageUrl: ${notification.imageUrl}');
-
-    showSimpleNotification(
-        Container(
-            child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-              Container(
-                  alignment: Alignment.centerLeft,
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(notification.title,
-                            textAlign: TextAlign.left,
-                            style: TextStyle(fontSize: 20.0)),
-                        Text(notification.body,
-                            textAlign: TextAlign.left,
-                            style: TextStyle(fontSize: 15.0))
-                      ])),
-              notification.imageUrl == null
-                  ? Container()
-                  : Image.network(notification.imageUrl!,
-                      width: 80.0, height: 80.0)
-            ])),
-        position: NotificationPosition.top,
-        background: Colors.lightBlueAccent);
   }
 }
