@@ -70,7 +70,9 @@ class PushNotificationService {
                           width: 80.0, height: 80.0)
                 ])),
             position: NotificationPosition.top,
-            background: Colors.lightBlueAccent);
+            background: Colors.lightBlueAccent,
+            slideDismiss: true
+        );
       }
     });
 

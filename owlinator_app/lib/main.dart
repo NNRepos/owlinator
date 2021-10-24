@@ -1,8 +1,7 @@
-import 'dart:io' show Platform;
-
 import 'package:Owlinator/Mapping.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter/material.dart';
 import 'package:overlay_support/overlay_support.dart';
@@ -29,6 +28,10 @@ class App extends StatelessWidget {
   final String? token;
   @override
   Widget build(BuildContext context) {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     return OverlaySupport.global(
         child: MaterialApp(
       debugShowCheckedModeBanner: false,
