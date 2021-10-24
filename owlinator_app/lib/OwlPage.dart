@@ -2,12 +2,14 @@ import 'package:Owlinator/data/OwlSettings.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:settings_ui/settings_ui.dart';
+import 'package:firebase_storage/firebase_storage.dart' as firebase_storage;
 
 import 'data/CommandDao.dart';
 import 'data/UserData.dart';
 import 'data/Command.dart';
 import 'data/OwlSettings.dart';
 
+// ignore: must_be_immutable
 class OwlPage extends StatefulWidget {
   OwlPage(
       {required this.device, required this.userData, required this.firestore});
@@ -24,6 +26,13 @@ class _OwlPageState extends State<OwlPage> {
     commandDao = CommandDao(userData);
   }
 
+  @override
+  void initState() {
+    super.initState();
+    imageUrls = _getImageUrls();
+  }
+
+  late Future<List<Map<String, dynamic>>> imageUrls;
   late UserData userData;
   List<String> commands = [
     "Trigger Alarm",
@@ -32,11 +41,17 @@ class _OwlPageState extends State<OwlPage> {
   String deviceName = 'Owl';
   int _selectedIndex = 0;
   late CommandDao commandDao;
+  static firebase_storage.FirebaseStorage storage =
+      firebase_storage.FirebaseStorage.instanceFor(bucket: 'taken-images');
   OwlSettings settings = OwlSettings.defaultSettings(Device("-1", "-1"), "-1");
   TextEditingController _OwlNameController = TextEditingController();
 
   Widget build(BuildContext context) {
-    List<Widget> _widgetOptions = <Widget>[OwlsTabs(), SettingsTab()];
+    List<Widget> _widgetOptions = <Widget>[
+      OwlsTabs(),
+      DetectionTab(),
+      SettingsTab()
+    ];
     getSettingsQuery(widget.device.id).then((result) {
       setState(() {
         if (this.mounted) {
@@ -48,7 +63,7 @@ class _OwlPageState extends State<OwlPage> {
     deviceName = widget.device.name;
     return Scaffold(
       appBar: AppBar(
-        title: Text("Owl" + (_selectedIndex == 0 ? " Controls" : " Settings")),
+        title: Text(deviceName + [" Controls", " Detections", " Settings"][_selectedIndex]),
       ),
       body: _widgetOptions.elementAt(_selectedIndex),
       bottomNavigationBar: buildBottomNavigationBar(),
@@ -70,6 +85,8 @@ class _OwlPageState extends State<OwlPage> {
         BottomNavigationBarItem(
             icon: ImageIcon(AssetImage('assets/thunder.png'), size: 20),
             label: "Actions"),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.photo_library), label: "Detections"),
         BottomNavigationBarItem(
             icon: Icon(Icons.account_circle), label: "Settings"),
       ],
@@ -96,7 +113,7 @@ class _OwlPageState extends State<OwlPage> {
           return InkWell(
               onTap: () {
                 sendCommand(commandName);
-                if(this.mounted) {
+                if (this.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Executing ' + commandName)));
                 }
@@ -108,28 +125,12 @@ class _OwlPageState extends State<OwlPage> {
                           style: TextStyle(
                               fontSize: 20, fontWeight: FontWeight.bold))),
                   decoration: BoxDecoration(
-                    // gradient: LinearGradient(
-                    //   begin: Alignment.topCenter,
-                    //   end: Alignment.bottomCenter,
-                    //   colors: [
-                    //     Color(0xFFEF5350),
-                    //     Color(0xFFB71C1C),
-                    //   ],
-                    // ),
                     border: Border.all(color: Colors.grey),
                     borderRadius: BorderRadius.only(
                         topLeft: Radius.circular(10),
                         topRight: Radius.circular(10),
                         bottomLeft: Radius.circular(10),
                         bottomRight: Radius.circular(10)),
-                    // boxShadow: [
-                    //   BoxShadow(
-                    //     color: Colors.grey.withOpacity(0.7),
-                    //     spreadRadius: 5,
-                    //     blurRadius: 5,
-                    //     offset: Offset(3, 7), // changes position of shadow
-                    //   ),
-                    // ],
                   )));
         }).toList(),
       ),
@@ -147,6 +148,112 @@ class _OwlPageState extends State<OwlPage> {
       ),
       commandDao.getCommandList(widget.device),
     ]);
+  }
+
+  Widget DetectionTab() {
+    Widget noImagesWidget = Center(child: Text("There are no detections", style: TextStyle(fontSize: 30)));
+    Widget errorWidget =
+        Center(child: Text("There was an error while retrieving detections", style: TextStyle(fontSize: 30)));
+    return FutureBuilder<List<Map<String, dynamic>>>(
+        future: imageUrls,
+        builder: (BuildContext context,
+            AsyncSnapshot<List<Map<String, dynamic>>> snapshot) {
+          if (snapshot.connectionState == ConnectionState.done) {
+            if (snapshot.hasError) {
+              print(snapshot.error);
+              return errorWidget;
+            }
+            if (snapshot.hasData) {
+              return snapshot.data!.length == 0
+                  ? noImagesWidget
+                  : GridView.builder(
+                      primary: true,
+                      padding: const EdgeInsets.all(20),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2),
+                      shrinkWrap: false,
+                      itemCount: snapshot.data!.length,
+                      itemBuilder: (BuildContext context, int index) {
+                        return Container(
+
+                          child: Column(children: [
+                            Container(
+                                padding: const EdgeInsets.fromLTRB(0, 0, 0, 10),
+                                width: 200.0,
+                                height: 165.0,
+                                child:
+                                    Image.network(snapshot.data![index]['url']! as String,
+                                        loadingBuilder: (BuildContext context,
+                                            Widget child,
+                                            ImageChunkEvent? loadingProgress) {
+                                  if (loadingProgress == null) return child;
+                                  return Center(
+                                    child: CircularProgressIndicator(
+                                      value:
+                                          loadingProgress.expectedTotalBytes !=
+                                                  null
+                                              ? loadingProgress
+                                                      .cumulativeBytesLoaded /
+                                                  loadingProgress
+                                                      .expectedTotalBytes!
+                                              : null,
+                                    ),
+                                  );
+                                },
+                                        fit: BoxFit.cover,
+                                        width: 200.0,
+                                        height: 165.0)),
+                            Row(
+
+                              children: [
+                                Text(
+                                    snapshot.data![index]['date']! as String,
+                                    style: TextStyle(fontSize: 10)),
+                                Text("Confidence: ${(snapshot.data![index]['confidence']! as double) * 100}%  ",
+                                    style: TextStyle(fontSize: 10))
+                              ],
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            )
+                          ]),
+
+                        );
+                      });
+            } else {
+              return noImagesWidget;
+            }
+          } else {
+            return Center(child: CircularProgressIndicator());
+          }
+        });
+  }
+
+  Future<List<Map<String, dynamic>>> _getImageUrls() async {
+    firebase_storage.ListResult allImages =
+        await storage.ref(widget.device.id).listAll();
+    List<Map<String, dynamic>> urls = [];
+    allImages.items.forEach((firebase_storage.Reference ref) async {
+      String url = await ref.getDownloadURL();
+      List<String> decomp = ref.name.split("_");
+      List<int> dateParts = decomp[0]
+          .split("-")
+          .map((e) => int.parse(e))
+          .toList();
+      DateTime date = DateTime(
+          dateParts[0],
+          dateParts[1],
+          dateParts[2],
+          dateParts[3],
+          dateParts[4],
+          dateParts[5]);
+      var regex = RegExp(r'\d*.?\d{1,2}');
+      double confidence = double.parse(
+          regex.firstMatch(decomp[1])!.group(0)!);
+      urls.add(<String, dynamic>{'url': url, 'confidence': confidence, 'date': " ${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute}", 'Date': date});
+      urls.sort((a,b) => -(a['Date'] as DateTime).compareTo((b['Date'] as DateTime)));
+    });
+
+    return urls;
   }
 
   Widget SettingsTab() {
