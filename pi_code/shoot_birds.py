@@ -16,7 +16,7 @@ from PIL import Image
 from firebase_admin import credentials, db, storage
 from pygame import mixer, event
 
-USE_NETWORK = True
+USE_NETWORK = False
 
 if USE_NETWORK:
     try:
@@ -221,7 +221,10 @@ class ServoController:
 
     @_run_if_gpio
     def rotate_head(self):
-        if not self.fixed_head:
+        if self.fixed_head:
+            self.set_head_degree(self.head_position)
+
+        else:
             self.head_position += self.head_direction
             self.set_head_degree(self.head_position)
 
@@ -331,7 +334,7 @@ class BigScaryOwl:
     DEVICE_ID_FILEPATH = Path("device_id.txt")
     if not DEVICE_ID_FILEPATH.is_file():
         raise IOError(f"{DEVICE_ID_FILEPATH} was not found")
-    
+
     DEVICE_ID = int(DEVICE_ID_FILEPATH.read_text())
     FIREBASE_KEY_FILE_NAME = "firebase_key.json"
     STORAGE_BUCKET_NAME = "taken-images"
@@ -357,6 +360,8 @@ class BigScaryOwl:
             self.network_output = None
             self.network_loop_ticks = 0
             self.network_fps = 0.0
+        else:
+            self.last_action_tick = 0.0
 
         # servo motor
         self.servo_motors = ServoController()
@@ -365,10 +370,13 @@ class BigScaryOwl:
         self.mp3 = SoundPlayer()
 
         # frame rate calculation
-        self.loop_ticks = 0
+        self.cv2_ticks = 0
         self.live_frame_count = 0
         self.livestream_fps = 0.0
         self.freq = cv2.getTickFrequency()
+
+        # seconds between alarms, used for testing
+        self.debug_action_gap = self.freq * 20
 
         # video stream
         self.videostream = VideoStream(resolution=(self.im_width, self.im_height)).start()
@@ -425,19 +433,26 @@ class BigScaryOwl:
 
             self.show_frame(livestream_frame)
 
-            self.commands_thread = Thread(target=self.check_realtime_commands)
-            self.commands_thread.start()
+            if self.is_thread_available(self.commands_thread):
+                self.commands_thread = Thread(target=self.check_realtime_commands)
+                self.commands_thread.start()
 
-            self.settings_thread = Thread(target=self.check_settings_changed)
-            self.settings_thread.start()
+            if self.is_thread_available(self.settings_thread):
+                self.settings_thread = Thread(target=self.check_settings_changed)
+                self.settings_thread.start()
 
-            self.rotate_thread = Thread(target=self.servo_motors.rotate_head)
-            self.rotate_thread.start()
+            if self.is_thread_available(self.rotate_thread):
+                self.rotate_thread = Thread(target=self.servo_motors.rotate_head)
+                self.rotate_thread.start()
 
             if cv2.waitKey(1) == ord('q'):
                 break
 
         self._clean_up()
+
+    @staticmethod
+    def is_thread_available(thread: Optional[Thread]):
+        return (thread is None) or (not thread.is_alive())
 
     def _handle_frame_and_network(self, camera_frame):
         if USE_NETWORK:
@@ -466,8 +481,9 @@ class BigScaryOwl:
 
         else:
             livestream_frame = camera_frame
-            if self.live_frame_count % 500 == 0:
+            if self.cv2_ticks - self.last_action_tick > self.debug_action_gap:
                 self._bird_detected_action(livestream_frame)
+                self.last_action_tick = self.cv2_ticks
         return livestream_frame
 
     def _clean_up(self):
@@ -478,27 +494,29 @@ class BigScaryOwl:
         self.servo_motors.clean_up()
 
     def _update_ticks(self):
-        if self.loop_ticks > 0:
+        if self.cv2_ticks > 0:
             # calculate framerate
-            t1 = self.loop_ticks
+            t1 = self.cv2_ticks
             t2 = cv2.getTickCount()
             time_delta = (t2 - t1) / self.freq
             self.livestream_fps = 1 / time_delta
             self.live_frame_count += 1
-        self.loop_ticks = cv2.getTickCount()
+        self.cv2_ticks = cv2.getTickCount()
 
     def _update_network_ticks(self):
-        if self.network_loop_ticks > 0:
-            t1 = self.network_loop_ticks
-            t2 = cv2.getTickCount()
-            time_delta = (t2 - t1) / self.freq
-            self.network_fps = 1 / time_delta
-        self.network_loop_ticks = cv2.getTickCount()
+        if USE_NETWORK:
+            if self.network_loop_ticks > 0:
+                t1 = self.network_loop_ticks
+                t2 = cv2.getTickCount()
+                time_delta = (t2 - t1) / self.freq
+                self.network_fps = 1 / time_delta
+            self.network_loop_ticks = cv2.getTickCount()
 
     def show_frame(self, frame):
         # draw framerate in corner of frame
         cv2.putText(frame, 'LFPS: {0:.2f}'.format(self.livestream_fps), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
-        cv2.putText(frame, 'NFPS: {0:.2f}'.format(self.network_fps), (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
+        if USE_NETWORK:
+            cv2.putText(frame, 'NFPS: {0:.2f}'.format(self.network_fps), (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.imshow('Object detector', frame)
 
     def _draw_confident_detections(self, frame, detection_results):
@@ -584,7 +602,7 @@ class BigScaryOwl:
         for command in my_device_commands:
             if my_device_commands[command]["applied"] == "false":
                 command_type = my_device_commands[command]["command"]
-                print(f"activating command {command_type}")
+                print(f"activating {command=} {command_type}")
                 self._run_command(command_type)
                 my_device_commands[command]["applied"] = "true"
 
@@ -615,7 +633,7 @@ class BigScaryOwl:
                 thread.join()
 
     def _flap_wings_action(self):
-        if (self.flap_wings_thread is None) or (not self.flap_wings_thread.is_alive()):
+        if self.is_thread_available(self.flap_wings_thread):
             self.flap_wings_thread = Thread(target=self.servo_motors.flap_wings)
             self.flap_wings_thread.start()
 
@@ -634,6 +652,7 @@ class BigScaryOwl:
         full_blob_path = f"{self.DEVICE_ID}/{full_image_name}"
         full_image_path = str(Path("images") / full_image_name)
 
+        # TODO@niv: add is_available? or is_busy?
         self.last_image_uploaded_url = None
         self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_blob_path, full_image_path))
         self.upload_image_thread.start()
@@ -660,6 +679,7 @@ class BigScaryOwl:
 
     def _notify_detection_action(self):
         if self.notifies_detections:
+            # TODO@niv
             self._send_notification()
             # self.notify_thread = Thread(target=self._send_notification)
             # self.notify_thread.start()
@@ -679,8 +699,9 @@ class BigScaryOwl:
         print(f"notification response: {response.text}")
 
     def _save_detection_metadata_action(self, timestamp, confidence):
-        self.upload_metadata_thread = Thread(target=self.upload_detection_metadata, args=(confidence, timestamp))
-        self.upload_metadata_thread.start()
+        if self.is_thread_available(self.upload_metadata_thread):
+            self.upload_metadata_thread = Thread(target=self.upload_detection_metadata, args=(confidence, timestamp))
+            self.upload_metadata_thread.start()
 
     def upload_detection_metadata(self, confidence, timestamp):
         curr_detection_dict = {"time": timestamp, "confidence": confidence}
