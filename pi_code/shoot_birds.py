@@ -602,7 +602,7 @@ class BigScaryOwl:
         for command in my_device_commands:
             if my_device_commands[command]["applied"] == "false":
                 command_type = my_device_commands[command]["command"]
-                print(f"activating {command=} {command_type}")
+                print(f"activating command {command} of type {command_type}")
                 self._run_command(command_type)
                 my_device_commands[command]["applied"] = "true"
 
