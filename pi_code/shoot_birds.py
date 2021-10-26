@@ -17,6 +17,7 @@ from firebase_admin import credentials, db, storage
 from pygame import mixer, event
 
 USE_NETWORK = True
+USE_MOTORS = True
 
 if USE_NETWORK:
     try:
@@ -26,8 +27,10 @@ if USE_NETWORK:
         from tensorflow.lite.python.interpreter import Interpreter
 
 try:
-    from RPi import GPIO
+    if not USE_MOTORS:
+        import fuck_shit_cunt
 
+    from RPi import GPIO
     GPIO.setmode(GPIO.BOARD)
 except ImportError:
     GPIO: Any = None
