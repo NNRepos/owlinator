@@ -16,7 +16,7 @@ from PIL import Image
 from firebase_admin import credentials, db, storage
 from pygame import mixer, event
 
-USE_NETWORK = False
+USE_NETWORK = True
 
 if USE_NETWORK:
     try:
@@ -327,7 +327,7 @@ class FirebaseManager:
 
 class BigScaryOwl:
     # detections
-    BIRD_CONFIDENCE = 0.3
+    MIN_BIRD_CONFIDENCE = 0.4
     BIRD_LABEL = "bird"
 
     # firebase
@@ -546,7 +546,7 @@ class BigScaryOwl:
     def _is_bird_high_confidence(self, num_scores=1):
         # look at the previous `num_scores` scores, and based on their average, decide if a bird was detected
         if len(self.bird_detection_scores) > num_scores:
-            if sum(self.bird_detection_scores[-num_scores:]) / num_scores > self.BIRD_CONFIDENCE:
+            if sum(self.bird_detection_scores[-num_scores:]) / num_scores > self.MIN_BIRD_CONFIDENCE:
                 return True
 
         return False
@@ -679,10 +679,9 @@ class BigScaryOwl:
 
     def _notify_detection_action(self):
         if self.notifies_detections:
-            # TODO@niv
-            self._send_notification()
-            # self.notify_thread = Thread(target=self._send_notification)
-            # self.notify_thread.start()
+            if self.is_thread_available(self.notify_thread):
+                self.notify_thread = Thread(target=self._send_notification)
+                self.notify_thread.start()
 
     def _send_notification(self):
         while self.last_image_uploaded_url is None:
