@@ -346,6 +346,7 @@ class BigScaryOwl:
     PAYLOAD_FILE_PATH = Path("notification_payload.json")
 
     def __init__(self):
+        # TODO@niv: read settings here and wait until not is_alive
         self.bird_detection_scores: List = []
         self.last_image_uploaded_url = None
 
@@ -394,7 +395,8 @@ class BigScaryOwl:
         my_user_id = settings["assicatedUid"]
         self.notification_token_db = db.reference(f"/userdata/{my_user_id}/notificationToken")
         self.detections_db = db.reference(f"/users/{my_user_id}/detections/device/{self.DEVICE_ID}")
-        self.commands_db = db.reference(f"/users/{my_user_id}/commands/device/{self.DEVICE_ID}")
+        self.commands_path = f"/users/{my_user_id}/commands/device/{self.DEVICE_ID}"
+        self.commands_db = db.reference(self.commands_path)
 
         self.detections_storage = storage.bucket()
 
@@ -606,7 +608,9 @@ class BigScaryOwl:
                 self._run_command(command_type)
                 my_device_commands[command]["applied"] = "true"
 
-        self.commands_db.set(my_device_commands)
+                specific_command_path = f"{self.commands_path}/{command}"
+                specific_command_db = db.reference(specific_command_path)
+                specific_command_db.set(my_device_commands[command])
 
     def check_settings_changed(self):
         settings: Any = self.settings_db.get()
