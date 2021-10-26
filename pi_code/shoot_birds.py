@@ -28,7 +28,7 @@ if USE_NETWORK:
 
 try:
     if not USE_MOTORS:
-        import fuck_shit_cunt
+        import shalhabi
 
     from RPi import GPIO
     GPIO.setmode(GPIO.BOARD)
@@ -256,7 +256,12 @@ class ServoController:
             if self.stop_flaps:
                 # a user stopped the command early
                 self.stop_flaps = False
+                self.servo_right.start(self.SERVO_RESET)
+                self.servo_left.start(self.SERVO_RESET)
                 break
+
+        self.servo_right.start(self.SERVO_RESET)
+        self.servo_left.start(self.SERVO_RESET)
 
 
 class BirdDetectionNetwork:
