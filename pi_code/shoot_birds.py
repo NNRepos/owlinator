@@ -105,7 +105,7 @@ class SoundPlayer:
                 self.playing_sound = False
 
         if (not self.playing_sound) and (not self.muted):
-            print("starting sound_process")
+            print(f"starting sound: {sound_file_name}")
             mixer.music.load(sound_file_name)
             mixer.music.play()
             self.playing_sound = True
@@ -217,6 +217,7 @@ class ServoController:
 
     @_run_if_gpio
     def flap_wings(self, times=2, sleep_time=0.5):
+        print(f"flapping wings {times} times, with {sleep_time} seconds in between")
         for _ in range(times):
             self.move_to_degree("right", self.DEGREE_CENTER)
             self.move_to_degree("left", self.MIN_DEGREE)
@@ -305,12 +306,11 @@ class FirebaseManager:
 
 class BigScaryOwl:
     # detections
-    BIRD_CONFIDENCE = 0.5
+    BIRD_CONFIDENCE = 0.3
     BIRD_LABEL = "bird"
 
     # firebase
-    # TODO@niv: move firebase handling into separate class
-    DEVICE_ID = 4
+    DEVICE_ID = 10
     FIREBASE_KEY_FILE_NAME = "firebase_key.json"
     STORAGE_BUCKET_NAME = "taken-images"
     DEFAULT_DB_URLS = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/",
@@ -322,6 +322,7 @@ class BigScaryOwl:
 
     def __init__(self):
         self.bird_detection_scores: List = []
+        self.last_image_uploaded_url = None
 
         args = self._get_input_arguments()
         self.min_confidence_threshold = float(args.threshold)
@@ -343,7 +344,7 @@ class BigScaryOwl:
 
         # frame rate calculation
         self.loop_ticks = 0
-        self.frame_count = 0
+        self.live_frame_count = 0
         self.livestream_fps = 0.0
         self.freq = cv2.getTickFrequency()
 
@@ -354,15 +355,14 @@ class BigScaryOwl:
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
         firebase_admin.initialize_app(cred, self.DEFAULT_DB_URLS)
 
-        self.user_commands_db = db.reference("/users")
+        self.settings_db = db.reference(f"/owls/{self.DEVICE_ID}/settings")
 
-        self.settings_db = db.reference(f"/owls/{self.DEVICE_ID}")
-
-        settings: Any = self.settings_db.get("settings")
+        settings: Any = self.settings_db.get()
         my_user_id = settings["assicatedUid"]
-        self.user_data_db = db.reference(f"/userdata/{my_user_id}")
+        self.notification_token_db = db.reference(f"/userdata/{my_user_id}/notificationToken")
+        self.detections_db = db.reference(f"/users/{my_user_id}/detections/device/{self.DEVICE_ID}")
+        self.commands_db = db.reference(f"/users/{my_user_id}/commands/device/{self.DEVICE_ID}")
 
-        # TODO@niv: create folder DEVICE_ID inside bucket
         self.detections_storage = storage.bucket()
 
         # threads
@@ -372,9 +372,10 @@ class BigScaryOwl:
         self.network_forward_thread: Optional[Thread] = None
         self.flap_wings_thread: Optional[Thread] = None
         self.notify_thread: Optional[Thread] = None
+        self.upload_metadata_thread: Optional[Thread] = None
 
         # settings
-        self.notifies_detections = False
+        self.notifies_detections = True
 
     @staticmethod
     def _get_input_arguments():
@@ -398,7 +399,7 @@ class BigScaryOwl:
 
             self.show_frame(livestream_frame)
 
-            self.triggers_thread = Thread(target=self.check_realtime_triggers)
+            self.triggers_thread = Thread(target=self.check_realtime_commands)
             self.triggers_thread.start()
 
             self.settings_thread = Thread(target=self.check_settings_changed)
@@ -438,7 +439,7 @@ class BigScaryOwl:
 
         else:
             livestream_frame = camera_frame
-            if self.frame_count % 500 == 0:
+            if self.live_frame_count % 500 == 0:
                 self._bird_detected_action(livestream_frame)
         return livestream_frame
 
@@ -456,7 +457,7 @@ class BigScaryOwl:
             t2 = cv2.getTickCount()
             time_delta = (t2 - t1) / self.freq
             self.livestream_fps = 1 / time_delta
-            self.frame_count += 1
+            self.live_frame_count += 1
         self.loop_ticks = cv2.getTickCount()
 
     def _update_network_ticks(self):
@@ -497,7 +498,7 @@ class BigScaryOwl:
 
         self.bird_detection_scores.append(best_bird_score)
 
-    def _is_bird_high_confidence(self, num_scores=3):
+    def _is_bird_high_confidence(self, num_scores=1):
         # look at the previous `num_scores` scores, and based on their average, decide if a bird was detected
         if len(self.bird_detection_scores) > num_scores:
             if sum(self.bird_detection_scores[-num_scores:]) / num_scores > self.BIRD_CONFIDENCE:
@@ -506,12 +507,16 @@ class BigScaryOwl:
         return False
 
     def _bird_detected_action(self, frame):
+        timestamp = self._get_timestamp()
+        confidence = (int(self.bird_detection_scores[-1] * 100)) if USE_NETWORK else 0
+
         self._play_sound_action(self.mp3.random_sound())
         self._flap_wings_action()
-        self._save_frame_action(frame)
+        self._save_frame_action(frame, timestamp, confidence)
         self._notify_detection_action()
+        self._save_detection_metadata_action(timestamp, confidence)
 
-        print(f"frames={self.frame_count}")
+        print(f"iterations={self.live_frame_count}")
 
     def _play_sound_action(self, sound_file_name=None):
         if sound_file_name is None:
@@ -538,28 +543,24 @@ class BigScaryOwl:
         cv2.rectangle(frame, (xmin, label_ymin - label_size[1] - 10), (xmin + label_size[0], label_ymin + base_line - 10), (255, 255, 255), cv2.FILLED)
         cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
-    def check_realtime_triggers(self):
+    def check_realtime_commands(self):
         """
         this takes about half a second, depending on internet speed
         """
-        my_device = self.DEVICE_ID
-        all_users = self.user_commands_db.get("")
-        assert isinstance(all_users, dict)
+        my_device_commands = self.commands_db.get()
+        assert isinstance(my_device_commands, dict)
 
-        for user in all_users:
-            if my_device < len(all_users[user]["commands"]["device"]):
-                my_device_commands = all_users[user]["commands"]["device"][my_device]
-                for command in my_device_commands:
-                    if my_device_commands[command]["applied"] == "false":
-                        command_type = my_device_commands[command]["command"]
-                        print(f"activating command {command_type}")
-                        self._run_command(command_type)
-                        my_device_commands[command]["applied"] = "true"
+        for command in my_device_commands:
+            if my_device_commands[command]["applied"] == "false":
+                command_type = my_device_commands[command]["command"]
+                print(f"activating command {command_type}")
+                self._run_command(command_type)
+                my_device_commands[command]["applied"] = "true"
 
-        self.user_commands_db.set(all_users)
+        self.commands_db.set(my_device_commands)
 
     def check_settings_changed(self):
-        settings: Any = self.settings_db.get("settings")
+        settings: Any = self.settings_db.get()
         self.mp3.muted = settings["mute"]
         self.notifies_detections = settings["notify"]
         self.servo_motors.fixed_head = settings["fixedHead"]
@@ -572,7 +573,8 @@ class BigScaryOwl:
     @property
     def all_threads(self):
         return [self.triggers_thread, self.settings_thread, self.upload_image_thread,
-                self.network_forward_thread, self.flap_wings_thread, self.notify_thread]
+                self.network_forward_thread, self.flap_wings_thread, self.notify_thread,
+                self.upload_metadata_thread]
 
     def kill_all_threads(self):
         self.mp3.stop_music()
@@ -592,29 +594,29 @@ class BigScaryOwl:
         elif command_type == "Stop Alarm":
             self.mp3.stop_music()
 
-    def _save_frame_action(self, frame):
-        timestamp = self._get_timestamp()
+    def _save_frame_action(self, frame, timestamp, confidence):
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_image = Image.fromarray(frame_rgb)
-        confidence = (self.bird_detection_scores[-1] * 100) if USE_NETWORK else 0
         full_image_name = f"{timestamp}_{self.DEVICE_ID}_{confidence}.jpg"
+        full_blob_path = f"{self.DEVICE_ID}/{full_image_name}"
         full_image_path = str(Path("images") / full_image_name)
 
         self.last_image_uploaded_url = None
-        self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_image_name, full_image_path))
+        self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_blob_path, full_image_path))
         self.upload_image_thread.start()
 
-    def _upload_frame_image(self, frame_image, full_image_name, full_image_path):
+    def _upload_frame_image(self, frame_image, full_blob_path, full_image_path):
         frame_image.save(full_image_path)
 
         print("uploading image to storage")
-        my_new_blob = self.detections_storage.blob(full_image_name)
+        my_new_blob = self.detections_storage.blob(full_blob_path)
         my_new_blob.upload_from_filename(filename=full_image_path, content_type="image/jpg")
-        fake_url = my_new_blob.public_url
-        real_url = (fake_url.replace(f"storage.googleapis.com/{self.STORAGE_BUCKET_NAME}/",
-                                     f"firebasestorage.googleapis.com/v0/b/{self.STORAGE_BUCKET_NAME}/o/")) + "?alt=media"
+
+        blob_path_without_slash = full_blob_path.replace("/", "%2F")
+        real_url = f"https://firebasestorage.googleapis.com/v0/b/{self.STORAGE_BUCKET_NAME}/o/{blob_path_without_slash}?alt=media"
 
         self.last_image_uploaded_url = real_url
+        print(f"uploaded image:{real_url}")
 
     @staticmethod
     def _get_timestamp():
@@ -624,24 +626,36 @@ class BigScaryOwl:
         return timestamp
 
     def _notify_detection_action(self):
-        # TODO@niv: make this a thread
         if self.notifies_detections:
-            while self.last_image_uploaded_url is None:
-                # wait for image to be uploaded
-                sleep(1)
+            self._send_notification()
+            # self.notify_thread = Thread(target=self._send_notification)
+            # self.notify_thread.start()
 
-            url = "https://fcm.googleapis.com/fcm/send"
+    def _send_notification(self):
+        while self.last_image_uploaded_url is None:
+            # wait for image to be uploaded
+            sleep(1)
 
-            payload = json.loads(self.PAYLOAD_FILE_PATH.read_text())
-            payload["data"]["url"] = self.last_image_uploaded_url
-            payload["to"] = self.user_data_db.get().to_dict()["notificationToken"]
-            payload_json = json.dumps(payload)
+        url = "https://fcm.googleapis.com/fcm/send"
+        payload = json.loads(self.PAYLOAD_FILE_PATH.read_text())
+        payload["data"]["url"] = self.last_image_uploaded_url
+        payload["to"] = self.notification_token_db.get()
+        payload_json = json.dumps(payload)
+        headers_dict = json.loads(self.HEADERS_FILE_PATH.read_text())
+        response = requests.post(url, headers=headers_dict, data=payload_json)
+        print(f"notification response: {response.text}")
 
-            headers_dict = json.loads(self.HEADERS_FILE_PATH.read_text())
+    def _save_detection_metadata_action(self, timestamp, confidence):
+        self.upload_metadata_thread = Thread(target=self.upload_detection_metadata, args=(confidence, timestamp))
+        self.upload_metadata_thread.start()
 
-            response = requests.post(url, headers=headers_dict, data=payload_json)
-
-            print(f"notification response: {response.text}")
+    def upload_detection_metadata(self, confidence, timestamp):
+        all_my_detections = self.detections_db.get()
+        assert isinstance(all_my_detections, list)
+        curr_detection_dict = {"time": timestamp, "confidence": confidence}
+        all_my_detections.append(curr_detection_dict)
+        self.detections_db.set(all_my_detections)
+        print("detection metadata saved")
 
 
 if __name__ == "__main__":
