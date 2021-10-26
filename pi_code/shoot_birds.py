@@ -137,23 +137,31 @@ def _run_if_gpio(func):
 
 class ServoController:
     PWM_HZ = 50
-
+    
+    # degree
     MIN_DEGREE = 0
     MAX_DEGREE = 180
     DEGREE_RANGE = MAX_DEGREE - MIN_DEGREE
-    DEGREE_CENTER = MIN_DEGREE + (DEGREE_RANGE / 2)
-
+    DEGREE_CENTER = MIN_DEGREE + DEGREE_RANGE/2
+    
+    # duty
     MIN_DUTY = 2
     MAX_DUTY = 12
     DUTY_RANGE = MAX_DUTY - MIN_DUTY
+    HEAD_START_DUTY = 2
 
-    # assuming they are divisible by each other
-    DEGREE_PER_DUTY = DEGREE_RANGE // DUTY_RANGE
+    DEGREE_PER_DUTY = DEGREE_RANGE / DUTY_RANGE
 
     SERVO_RESET = 0
+    
+    # movement time
+    REACTION_TIME = 0.2
+    PER_DUTY_TIME = 0.1
+    MIN_MOVE_THRESHOLD = 0.3
 
-    def __init__(self, head_pin=11, right_pin=13, left_pin=15):
+    def __init__(self, head_pin=7, right_pin=5, left_pin=3):
         self.fixed_head = False
+        self.curr_head_duty = self.HEAD_START_DUTY
 
         if GPIO is not None:
             GPIO.setup(head_pin, GPIO.OUT)
@@ -167,32 +175,22 @@ class ServoController:
             self.servo_head.start(self.SERVO_RESET)
             self.servo_right.start(self.SERVO_RESET)
             self.servo_left.start(self.SERVO_RESET)
-
-            self.move_to_degree("right", self.MIN_DEGREE)
-            self.move_to_degree("left", self.DEGREE_CENTER)
-            self.move_to_degree("head", self.DEGREE_CENTER)
-
+            
+            self.set_head_degree(self.DEGREE_CENTER)
             self.head_position = self.DEGREE_CENTER
+            
+            # this value will be added on every rotation
             self.head_direction = self.DEGREE_PER_DUTY
+    
+    def get_sleep_time(self, old_duty: float, new_duty: float) -> float:
+        duty_diff = abs(new_duty - old_duty)
+        expected_time = self.REACTION_TIME + duty_diff * self.PER_DUTY_TIME
+        wait_time = max(self.MIN_MOVE_THRESHOLD, expected_time)
+        return wait_time
 
     @_run_if_gpio
-    def degree_to_duty(self, degree: int):
-        return self.MIN_DUTY + (degree // self.DEGREE_PER_DUTY)
-
-    @_run_if_gpio
-    def move_to_degree(self, servo_name, degree: Union[float, int]):
-        degree = int(round(degree))
-        if not self.MIN_DEGREE <= degree <= self.MAX_DEGREE:
-            print(f"got illegal motor degree = {degree}, skipping command")
-            return
-
-        duty = self.degree_to_duty(degree)
-        if servo_name == "right":
-            self.servo_right.ChangeDutyCycle(duty)
-        elif servo_name == "left":
-            self.servo_left.ChangeDutyCycle(duty)
-        elif servo_name == "head":
-            self.servo_head.ChangeDutyCycle(duty)
+    def degree_to_duty(self, degree: int) -> float:
+        return self.MIN_DUTY + ((degree - self.MIN_DEGREE) / self.DEGREE_PER_DUTY)
 
     @_run_if_gpio
     def clean_up(self):
@@ -200,10 +198,25 @@ class ServoController:
         self.servo_right.stop()
         self.servo_head.stop()
         GPIO.cleanup()
+        sleep(0.5)
 
     @_run_if_gpio
-    def set_head_degree(self, degree):
-        self.move_to_degree("head", degree)
+    def set_head_degree(self, degree: Union[float, int]):
+        degree = int(round(degree))
+        if not self.MIN_DEGREE <= degree <= self.MAX_DEGREE:
+            print(f"got illegal motor degree = {degree}, skipping command")
+            return
+
+        new_duty = self.degree_to_duty(degree)
+        self.servo_head.ChangeDutyCycle(new_duty)
+        old_duty = self.curr_head_duty
+        self.curr_head_duty = new_duty
+        wait_time = self.get_sleep_time(old_duty, new_duty)
+        print(f"moving head from {old_duty} to {new_duty}, waiting {wait_time} seconds")
+        sleep(wait_time)
+        
+        # if we don't start the head after moving it, it keeps moving
+        self.servo_head.start(self.SERVO_RESET)
 
     @_run_if_gpio
     def rotate_head(self):
@@ -216,14 +229,14 @@ class ServoController:
                 self.head_direction = -self.head_direction
 
     @_run_if_gpio
-    def flap_wings(self, times=2, sleep_time=0.5):
+    def flap_wings(self, times=4, sleep_time=0.66):
         print(f"flapping wings {times} times, with {sleep_time} seconds in between")
         for _ in range(times):
-            self.move_to_degree("right", self.DEGREE_CENTER)
-            self.move_to_degree("left", self.MIN_DEGREE)
+            self.servo_right.ChangeDutyCycle(2)
+            self.servo_left.ChangeDutyCycle(7)
             sleep(sleep_time)
-            self.move_to_degree("right", self.MIN_DEGREE)
-            self.move_to_degree("left", self.DEGREE_CENTER)
+            self.servo_right.ChangeDutyCycle(7)
+            self.servo_left.ChangeDutyCycle(2)
             sleep(sleep_time)
 
 
@@ -337,7 +350,8 @@ class BigScaryOwl:
             self.network_fps = 0.0
 
         # servo motor
-        self.servo_motors = ServoController(head_pin=args.headpin, right_pin=args.rightpin, left_pin=args.leftpin)
+        # TODO@niv: use args maybe
+        self.servo_motors = ServoController()
 
         # sounds
         self.mp3 = SoundPlayer()
@@ -404,7 +418,8 @@ class BigScaryOwl:
 
             self.settings_thread = Thread(target=self.check_settings_changed)
             self.settings_thread.start()
-
+            
+            # TODO@niv: rotate_thread
             self.servo_motors.rotate_head()
 
             if cv2.waitKey(1) == ord('q'):
