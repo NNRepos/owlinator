@@ -26,7 +26,7 @@ if USE_NETWORK:
         from tensorflow.lite.python.interpreter import Interpreter
 
 try:
-    import RPi.GPIO as GPIO
+    from RPi import GPIO
 
     GPIO.setmode(GPIO.BOARD)
 except ImportError:
@@ -137,13 +137,13 @@ def _run_if_gpio(func):
 
 class ServoController:
     PWM_HZ = 50
-    
+
     # degree
     MIN_DEGREE = 0
     MAX_DEGREE = 180
     DEGREE_RANGE = MAX_DEGREE - MIN_DEGREE
-    DEGREE_CENTER = MIN_DEGREE + DEGREE_RANGE/2
-    
+    DEGREE_CENTER = MIN_DEGREE + DEGREE_RANGE / 2
+
     # duty
     MIN_DUTY = 2
     MAX_DUTY = 12
@@ -153,7 +153,7 @@ class ServoController:
     DEGREE_PER_DUTY = DEGREE_RANGE / DUTY_RANGE
 
     SERVO_RESET = 0
-    
+
     # movement time
     REACTION_TIME = 0.2
     PER_DUTY_TIME = 0.1
@@ -162,6 +162,7 @@ class ServoController:
     def __init__(self, head_pin=7, right_pin=5, left_pin=3):
         self.fixed_head = False
         self.curr_head_duty = self.HEAD_START_DUTY
+        self.stop_flaps = False
 
         if GPIO is not None:
             GPIO.setup(head_pin, GPIO.OUT)
@@ -175,13 +176,13 @@ class ServoController:
             self.servo_head.start(self.SERVO_RESET)
             self.servo_right.start(self.SERVO_RESET)
             self.servo_left.start(self.SERVO_RESET)
-            
+
             self.set_head_degree(self.DEGREE_CENTER)
             self.head_position = self.DEGREE_CENTER
-            
+
             # this value will be added on every rotation
             self.head_direction = self.DEGREE_PER_DUTY
-    
+
     def get_sleep_time(self, old_duty: float, new_duty: float) -> float:
         duty_diff = abs(new_duty - old_duty)
         expected_time = self.REACTION_TIME + duty_diff * self.PER_DUTY_TIME
@@ -214,7 +215,7 @@ class ServoController:
         wait_time = self.get_sleep_time(old_duty, new_duty)
         print(f"moving head from {old_duty} to {new_duty}, waiting {wait_time} seconds")
         sleep(wait_time)
-        
+
         # if we don't start the head after moving it, it keeps moving
         self.servo_head.start(self.SERVO_RESET)
 
@@ -238,6 +239,10 @@ class ServoController:
             self.servo_right.ChangeDutyCycle(7)
             self.servo_left.ChangeDutyCycle(2)
             sleep(sleep_time)
+            if self.stop_flaps:
+                # a user stopped the command early
+                self.stop_flaps = False
+                break
 
 
 class BirdDetectionNetwork:
@@ -350,7 +355,6 @@ class BigScaryOwl:
             self.network_fps = 0.0
 
         # servo motor
-        # TODO@niv: use args maybe
         self.servo_motors = ServoController()
 
         # sounds
@@ -372,6 +376,9 @@ class BigScaryOwl:
         self.settings_db = db.reference(f"/owls/{self.DEVICE_ID}/settings")
 
         settings: Any = self.settings_db.get()
+        if settings is None:
+            raise IOError(f"could not find /owls/{self.DEVICE_ID}/settings in realtime database")
+
         my_user_id = settings["assicatedUid"]
         self.notification_token_db = db.reference(f"/userdata/{my_user_id}/notificationToken")
         self.detections_db = db.reference(f"/users/{my_user_id}/detections/device/{self.DEVICE_ID}")
@@ -380,8 +387,9 @@ class BigScaryOwl:
         self.detections_storage = storage.bucket()
 
         # threads
-        self.triggers_thread: Optional[Thread] = None
+        self.commands_thread: Optional[Thread] = None
         self.settings_thread: Optional[Thread] = None
+        self.rotate_thread: Optional[Thread] = None
         self.upload_image_thread: Optional[Thread] = None
         self.network_forward_thread: Optional[Thread] = None
         self.flap_wings_thread: Optional[Thread] = None
@@ -413,14 +421,14 @@ class BigScaryOwl:
 
             self.show_frame(livestream_frame)
 
-            self.triggers_thread = Thread(target=self.check_realtime_commands)
-            self.triggers_thread.start()
+            self.commands_thread = Thread(target=self.check_realtime_commands)
+            self.commands_thread.start()
 
             self.settings_thread = Thread(target=self.check_settings_changed)
             self.settings_thread.start()
-            
-            # TODO@niv: rotate_thread
-            self.servo_motors.rotate_head()
+
+            self.rotate_thread = Thread(target=self.servo_motors.rotate_head)
+            self.rotate_thread.start()
 
             if cv2.waitKey(1) == ord('q'):
                 break
@@ -563,7 +571,10 @@ class BigScaryOwl:
         this takes about half a second, depending on internet speed
         """
         my_device_commands = self.commands_db.get()
-        assert isinstance(my_device_commands, dict)
+        if my_device_commands is None:
+            return
+
+        assert isinstance(my_device_commands, dict), "device commands of wrong format"
 
         for command in my_device_commands:
             if my_device_commands[command]["applied"] == "false":
@@ -587,7 +598,7 @@ class BigScaryOwl:
 
     @property
     def all_threads(self):
-        return [self.triggers_thread, self.settings_thread, self.upload_image_thread,
+        return [self.commands_thread, self.settings_thread, self.upload_image_thread,
                 self.network_forward_thread, self.flap_wings_thread, self.notify_thread,
                 self.upload_metadata_thread]
 
@@ -606,13 +617,15 @@ class BigScaryOwl:
     def _run_command(self, command_type: str):
         if command_type == "Trigger Alarm":
             self._play_sound_action()
+            self._flap_wings_action()
         elif command_type == "Stop Alarm":
             self.mp3.stop_music()
+            self._stop_wings()
 
     def _save_frame_action(self, frame, timestamp, confidence):
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_image = Image.fromarray(frame_rgb)
-        full_image_name = f"{timestamp}_{self.DEVICE_ID}_{confidence}.jpg"
+        full_image_name = f"{timestamp}_{confidence}.jpg"
         full_blob_path = f"{self.DEVICE_ID}/{full_image_name}"
         full_image_path = str(Path("images") / full_image_name)
 
@@ -665,12 +678,20 @@ class BigScaryOwl:
         self.upload_metadata_thread.start()
 
     def upload_detection_metadata(self, confidence, timestamp):
-        all_my_detections = self.detections_db.get()
-        assert isinstance(all_my_detections, list)
         curr_detection_dict = {"time": timestamp, "confidence": confidence}
-        all_my_detections.append(curr_detection_dict)
-        self.detections_db.set(all_my_detections)
+
+        all_my_detections = self.detections_db.get()
+        if all_my_detections is None:
+            self.detections_db.set([curr_detection_dict])
+        else:
+            assert isinstance(all_my_detections, list)
+            all_my_detections.append(curr_detection_dict)
+            self.detections_db.set(all_my_detections)
+
         print("detection metadata saved")
+
+    def _stop_wings(self):
+        self.servo_motors.stop_flaps = True
 
 
 if __name__ == "__main__":
