@@ -160,6 +160,7 @@ class ServoController:
     MIN_MOVE_THRESHOLD = 0.3
 
     def __init__(self, head_pin=7, right_pin=5, left_pin=3):
+        self.TIME_BETWEEN_ROTATIONS = 2
         self.fixed_head = False
         self.curr_head_duty = self.HEAD_START_DUTY
         self.stop_flaps = False
@@ -208,6 +209,10 @@ class ServoController:
             print(f"got illegal motor degree = {degree}, skipping command")
             return
 
+        if degree == self.head_position:
+            print("head is already at the required angle")
+            return
+
         new_duty = self.degree_to_duty(degree)
         self.servo_head.ChangeDutyCycle(new_duty)
         old_duty = self.curr_head_duty
@@ -218,6 +223,7 @@ class ServoController:
 
         # if we don't start the head after moving it, it keeps moving
         self.servo_head.start(self.SERVO_RESET)
+        self.head_position = degree
 
     @_run_if_gpio
     def rotate_head(self):
@@ -231,6 +237,8 @@ class ServoController:
             # head reached min/max
             if not (self.MIN_DEGREE < self.head_position < self.MAX_DEGREE):
                 self.head_direction = -self.head_direction
+
+            sleep(self.TIME_BETWEEN_ROTATIONS)
 
     @_run_if_gpio
     def flap_wings(self, times=4, sleep_time=0.66):
@@ -329,6 +337,8 @@ class BigScaryOwl:
     # detections
     MIN_BIRD_CONFIDENCE = 0.4
     BIRD_LABEL = "bird"
+    MIN_SEC_BETWEEN_DETECTIONS = 30
+    MIN_SEC_BETWEEN_TESTING = 20
 
     # firebase
     DEVICE_ID_FILEPATH = Path("device_id.txt")
@@ -346,9 +356,9 @@ class BigScaryOwl:
     PAYLOAD_FILE_PATH = Path("notification_payload.json")
 
     def __init__(self):
-        # TODO@niv: read settings here and wait until not is_alive
         self.bird_detection_scores: List = []
         self.last_image_uploaded_url = None
+        self.last_detection_time = None
 
         args = self._get_input_arguments()
         self.min_confidence_threshold = float(args.threshold)
@@ -412,6 +422,8 @@ class BigScaryOwl:
 
         # settings
         self.notifies_detections = True
+        print("reading initial settings")
+        self.check_settings_changed()
 
     @staticmethod
     def _get_input_arguments():
@@ -473,9 +485,10 @@ class BigScaryOwl:
                 if detections is not None:
                     # a detection was complete, we need to analyze its results
                     self._save_detection_score(detections)
-                    # self._draw_confident_detections(livestream_frame, detections)
                     uploaded_frame = livestream_frame.copy()
-                    if self._is_bird_high_confidence():
+                    now = datetime.now()
+                    if self._is_bird_high_confidence() and self._is_passed_time_since_last_detection(now):
+                        self.last_detection_time = now
                         self._bird_detected_action(uploaded_frame)
 
                 self.network_forward_thread = Thread(target=self.network.run_image_through_network, args=(input_data,))
@@ -627,7 +640,7 @@ class BigScaryOwl:
     def all_threads(self):
         return [self.commands_thread, self.settings_thread, self.upload_image_thread,
                 self.network_forward_thread, self.flap_wings_thread, self.notify_thread,
-                self.upload_metadata_thread]
+                self.upload_metadata_thread, self.rotate_thread]
 
     def kill_all_threads(self):
         self.mp3.stop_music()
@@ -656,10 +669,10 @@ class BigScaryOwl:
         full_blob_path = f"{self.DEVICE_ID}/{full_image_name}"
         full_image_path = str(Path("images") / full_image_name)
 
-        # TODO@niv: add is_available? or is_busy?
         self.last_image_uploaded_url = None
-        self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_blob_path, full_image_path))
-        self.upload_image_thread.start()
+        if self.is_thread_available(self.upload_image_thread):
+            self.upload_image_thread = Thread(target=self._upload_frame_image, args=(frame_image, full_blob_path, full_image_path))
+            self.upload_image_thread.start()
 
     def _upload_frame_image(self, frame_image, full_blob_path, full_image_path):
         frame_image.save(full_image_path)
@@ -721,6 +734,14 @@ class BigScaryOwl:
 
     def _stop_wings(self):
         self.servo_motors.stop_flaps = True
+
+    def _is_passed_time_since_last_detection(self, now):
+        if self.last_detection_time is None:
+            return True
+
+        delta = (now - self.last_detection_time).seconds
+        enough_time_passed = delta > self.MIN_SEC_BETWEEN_DETECTIONS
+        return enough_time_passed
 
 
 if __name__ == "__main__":
