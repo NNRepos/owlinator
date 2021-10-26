@@ -178,8 +178,8 @@ class ServoController:
             self.servo_right.start(self.SERVO_RESET)
             self.servo_left.start(self.SERVO_RESET)
 
-            self.set_head_degree(self.DEGREE_CENTER)
             self.head_position = self.DEGREE_CENTER
+            self.set_head_degree(self.DEGREE_CENTER)
 
             # this value will be added on every rotation
             self.head_direction = self.DEGREE_PER_DUTY
