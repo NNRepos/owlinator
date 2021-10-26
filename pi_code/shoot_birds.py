@@ -13,7 +13,7 @@ import numpy as np
 import pygame
 import requests
 from PIL import Image
-from firebase_admin import credentials, db, firestore, storage
+from firebase_admin import credentials, db, storage
 from pygame import mixer, event
 
 USE_NETWORK = True
@@ -353,16 +353,16 @@ class BigScaryOwl:
         # initalize firebase app
         cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
         firebase_admin.initialize_app(cred, self.DEFAULT_DB_URLS)
-        firestore_client = firestore.client()
 
         self.user_commands_db = db.reference("/users")
 
-        self.settings_db = firestore_client.collection("Owls").document(str(self.DEVICE_ID))
+        self.settings_db = db.reference(f"/owls/{self.DEVICE_ID}")
 
-        settings = self.settings_db.get().to_dict()["settings"]
+        settings: Any = self.settings_db.get("settings")
         my_user_id = settings["assicatedUid"]
-        self.user_data_db = firestore_client.collection("UserData").document(my_user_id)
+        self.user_data_db = db.reference(f"/userdata/{my_user_id}")
 
+        # TODO@niv: create folder DEVICE_ID inside bucket
         self.detections_storage = storage.bucket()
 
         # threads
@@ -559,7 +559,7 @@ class BigScaryOwl:
         self.user_commands_db.set(all_users)
 
     def check_settings_changed(self):
-        settings = self.settings_db.get().to_dict()["settings"]
+        settings: Any = self.settings_db.get("settings")
         self.mp3.muted = settings["mute"]
         self.notifies_detections = settings["notify"]
         self.servo_motors.fixed_head = settings["fixedHead"]
