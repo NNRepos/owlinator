@@ -328,7 +328,11 @@ class BigScaryOwl:
     BIRD_LABEL = "bird"
 
     # firebase
-    DEVICE_ID = 10
+    DEVICE_ID_FILEPATH = Path("device_id.txt")
+    if not DEVICE_ID_FILEPATH.is_file():
+        raise IOError(f"{DEVICE_ID_FILEPATH} was not found")
+    
+    DEVICE_ID = int(DEVICE_ID_FILEPATH.read_text())
     FIREBASE_KEY_FILE_NAME = "firebase_key.json"
     STORAGE_BUCKET_NAME = "taken-images"
     DEFAULT_DB_URLS = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/",
@@ -532,6 +536,7 @@ class BigScaryOwl:
     def _bird_detected_action(self, frame):
         timestamp = self._get_timestamp()
         confidence = (int(self.bird_detection_scores[-1] * 100)) if USE_NETWORK else 0
+        print(f"bird detected at {timestamp} with {confidence}% confidence")
 
         self._play_sound_action(self.mp3.random_sound())
         self._flap_wings_action()
