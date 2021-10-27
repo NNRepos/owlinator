@@ -14,7 +14,6 @@ class SoundPlayer:
         self.playing_sound = False
         self.muted = True
 
-        pygame.init()
         mixer.init()
         mixer.music.set_endevent(self.MUSIC_END_EVENT)
 

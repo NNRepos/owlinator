@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from threading import Thread
+import pygame
 from time import sleep
 from typing import List, Optional, Any
 
@@ -13,6 +14,7 @@ import requests
 from PIL import Image
 from firebase_admin import credentials, db, storage
 
+pygame.init()
 from pi_code.bird_detection_network import BirdDetectionNetwork, USE_NETWORK
 from pi_code.servo_controller import ServoController, GPIO
 from pi_code.sound_player import SoundPlayer
