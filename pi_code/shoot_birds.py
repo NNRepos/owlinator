@@ -18,6 +18,15 @@ from pi_code.servo_controller import ServoController, GPIO
 from pi_code.sound_player import SoundPlayer
 from pi_code.video_stream import VideoStream
 
+GOOGLE_URL = "https://www.google.com/"
+GOOGLE_TIMEOUT = 5
+try:
+    request = requests.get(GOOGLE_URL, timeout=GOOGLE_TIMEOUT)
+    print("network is up")
+except (requests.ConnectionError, requests.Timeout) as exception:
+    print("network is dead. exiting")
+    exit(-1)
+
 
 class BigScaryOwl:
     CWD = Path(__file__).parent
