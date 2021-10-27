@@ -27,6 +27,7 @@ class SoundPlayer:
         return random.choice(self.all_sounds)
 
     def play_sound(self, sound_file_name):
+        # TODO@niv: if args.frame==0, use pygame.mixer.init instead of pygame.init, or use mixer.event.get
         # try:
         #     for e in event.get():
         #         if e.type == self.MUSIC_END_EVENT:
