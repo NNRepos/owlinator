@@ -27,9 +27,12 @@ class SoundPlayer:
         return random.choice(self.all_sounds)
 
     def play_sound(self, sound_file_name):
-        for e in event.get():
-            if e.type == self.MUSIC_END_EVENT:
-                self.playing_sound = False
+        # try:
+        #     for e in event.get():
+        #         if e.type == self.MUSIC_END_EVENT:
+        #             self.playing_sound = False
+        # except:
+        self.playing_sound = False
 
         if (not self.playing_sound) and (not self.muted):
             print(f"starting sound: {sound_file_name}")
