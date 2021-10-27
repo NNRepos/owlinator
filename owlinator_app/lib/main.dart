@@ -24,6 +24,7 @@ Future<void> main() async {
 }
 
 class App extends StatelessWidget {
+
   const App(this.token, {Key? key}) : super(key: key);
   final String? token;
   @override
