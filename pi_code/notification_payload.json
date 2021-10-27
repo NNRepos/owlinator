@@ -3,7 +3,7 @@
   "priority": "high",
   "notification": {
     "title": "Bird Detected",
-    "body": "imma fuck deez niggas up"
+    "body": "Tap for more info"
   },
   "data": {
     "url": "url of uploaded image"

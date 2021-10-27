@@ -348,7 +348,7 @@ class BigScaryOwl:
     # detections
     MIN_BIRD_CONFIDENCE = 0.4
     BIRD_LABEL = "bird"
-    MIN_SEC_BETWEEN_DETECTIONS = 30
+    MIN_SEC_BETWEEN_DETECTIONS =5 
     MIN_SEC_BETWEEN_TESTING = 20
 
     # firebase
@@ -372,6 +372,7 @@ class BigScaryOwl:
         self.last_detection_time = None
 
         args = self._get_input_arguments()
+        self.is_show_frame = bool(int(args.frame))
         self.min_confidence_threshold = float(args.threshold)
         self.im_width, self.im_height = [int(val) for val in args.resolution.split('x')]
 
@@ -446,6 +447,7 @@ class BigScaryOwl:
         parser.add_argument('--headpin', help='head servo pin number', default=11)
         parser.add_argument('--rightpin', help='right servo pin number', default=13)
         parser.add_argument('--leftpin', help='left servo pin number', default=15)
+        parser.add_argument('--frame', default=1)
         return parser.parse_args()
 
     def run_video_loop(self):
@@ -539,11 +541,12 @@ class BigScaryOwl:
             self.network_loop_ticks = cv2.getTickCount()
 
     def show_frame(self, frame):
-        # draw framerate in corner of frame
-        cv2.putText(frame, 'LFPS: {0:.2f}'.format(self.livestream_fps), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
-        if USE_NETWORK:
-            cv2.putText(frame, 'NFPS: {0:.2f}'.format(self.network_fps), (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.imshow('Object detector', frame)
+        if self.is_show_frame:
+            # draw framerate in corner of frame
+            cv2.putText(frame, 'LFPS: {0:.2f}'.format(self.livestream_fps), (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv2.LINE_AA)
+            if USE_NETWORK:
+                cv2.putText(frame, 'NFPS: {0:.2f}'.format(self.network_fps), (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.imshow('Object detector', frame)
 
     def _draw_confident_detections(self, frame, detection_results):
         boxes, classes, scores = detection_results
