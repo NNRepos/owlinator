@@ -235,14 +235,14 @@ class ServoController:
             self.set_head_degree(self.head_position)
 
         else:
-            self.head_position += self.head_direction
+            new_position = self.head_position + self.head_direction
 
-            if not (self.MIN_DEGREE < self.head_position < self.MAX_DEGREE):
+            if not (self.MIN_DEGREE < new_position < self.MAX_DEGREE):
                 # head reached min/max
                 self.head_direction = -self.head_direction
-                self.head_position += self.head_direction
+                new_position += self.head_direction
 
-            self.set_head_degree(self.head_position)
+            self.set_head_degree(new_position)
 
             sleep(self.TIME_BETWEEN_ROTATIONS)
 
