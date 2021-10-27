@@ -1,24 +1,24 @@
 # TODO@niv: /sys/class/thermal/thermal_zone0/temp
 import argparse
 import json
-import random
 from datetime import datetime
 from pathlib import Path
 from threading import Thread
 from time import sleep
-from typing import List, Optional, Any, Union
+from typing import List, Optional, Any
 
 import cv2
 import firebase_admin
-import numpy as np
-import pygame
 import requests
 from PIL import Image
 from firebase_admin import credentials, db, storage
-from pygame import mixer, event
+
+from pi_code.bird_detection_network import BirdDetectionNetwork
+from pi_code.servo_controller import ServoController, GPIO
+from pi_code.sound_player import SoundPlayer
+from pi_code.video_stream import VideoStream
 
 USE_NETWORK = True
-USE_MOTORS = True
 
 if USE_NETWORK:
     try:
@@ -27,328 +27,12 @@ if USE_NETWORK:
     except ImportError:
         from tensorflow.lite.python.interpreter import Interpreter
 
-try:
-    if not USE_MOTORS:
-        import shalhabi
-
-    from RPi import GPIO
-
-    GPIO.setmode(GPIO.BOARD)
-except ImportError:
-    GPIO: Any = None
-    print("gpio module not imported")
-
-
-class VideoStream:
-    """camera object that controls video streaming from the Picamera"""
-
-    def __init__(self, resolution=(640, 480)):
-        # initialize the PiCamera and the camera image stream
-        print("setting up cv2 video, this takes ~5 seconds...")
-        self.stream = cv2.VideoCapture(0)
-        self.stream.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.stream.set(3, resolution[0])
-        self.stream.set(4, resolution[1])
-
-        # read first frame from the stream
-        (self.grabbed, self.frame) = self.stream.read()
-
-        # variable to control when the camera is stopped
-        self.stopped = False
-
-    def start(self):
-        # start the thread that reads frames from the video stream
-        Thread(target=self.update, args=()).start()
-        return self
-
-    def update(self):
-        # keep looping indefinitely until the thread is stopped
-        while True:
-            # if the camera is stopped, stop the thread
-            if self.stopped:
-                # close camera resources
-                self.stream.release()
-                return
-
-            # otherwise, grab the next frame from the stream
-            (self.grabbed, self.frame) = self.stream.read()
-
-    def read(self):
-        # return the most recent frame
-        return self.frame
-
-    def stop(self):
-        # indicate that the camera and thread should be stopped
-        self.stopped = True
-
-
-class SoundPlayer:
-    SOUNDS_PATH = Path(__file__).parent / "sounds"
-    MUSIC_END_EVENT = pygame.USEREVENT + 1
-
-    def __init__(self):
-        # use pygame for the sound mixer
-        self.playing_sound = False
-        self.muted = True
-
-        pygame.init()
-        mixer.init()
-        mixer.music.set_endevent(self.MUSIC_END_EVENT)
-
-        self.owl_call = self.SOUNDS_PATH / "owl_call.mp3"
-        self.owl_hoot = self.SOUNDS_PATH / "owl_hoot.mp3"
-        self.owl_screech = self.SOUNDS_PATH / "owl_screech.mp3"
-        self.owl_surprise = self.SOUNDS_PATH / "surprise.mp3"
-        self.all_sounds = [self.owl_call, self.owl_hoot, self.owl_screech, self.owl_surprise]
-
-    def random_sound(self):
-        return random.choice(self.all_sounds)
-
-    def play_sound(self, sound_file_name):
-        for e in event.get():
-            if e.type == self.MUSIC_END_EVENT:
-                self.playing_sound = False
-
-        if (not self.playing_sound) and (not self.muted):
-            print(f"starting sound: {sound_file_name}")
-            mixer.music.load(sound_file_name)
-            mixer.music.play()
-            self.playing_sound = True
-
-    @staticmethod
-    def stop_music():
-        mixer.music.stop()
-
-    @staticmethod
-    def change_volume_setting(volume=0.2):
-        volume = round(volume, ndigits=2)
-        if 0 <= volume <= 1:
-            pygame.mixer.music.set_volume(volume)
-        else:
-            print(f"got illegal volume = {volume}, skipping command")
-
-
-def _run_if_gpio(func):
-    """
-    a decorator for servo methods (we only run if GPIO was imported)
-    """
-
-    def wrapper(*args, **kwargs):
-        if GPIO is not None:
-            return func(*args, **kwargs)
-
-    return wrapper
-
-
-class ServoController:
-    PWM_HZ = 50
-
-    # degree
-    MIN_DEGREE = 0
-    MAX_DEGREE = 180
-    DEGREE_RANGE = MAX_DEGREE - MIN_DEGREE
-    DEGREE_CENTER = MIN_DEGREE + DEGREE_RANGE / 2
-
-    # duty
-    MIN_DUTY = 2
-    MAX_DUTY = 12
-    DUTY_RANGE = MAX_DUTY - MIN_DUTY
-    HEAD_START_DUTY = 2
-
-    DEGREE_PER_DUTY = DEGREE_RANGE / DUTY_RANGE
-
-    SERVO_RESET = 0
-
-    # movement time
-    REACTION_TIME = 0.2
-    PER_DUTY_TIME = 0.1
-    MIN_MOVE_THRESHOLD = 0.3
-
-    def __init__(self, head_pin=7, right_pin=5, left_pin=3):
-        self.TIME_BETWEEN_ROTATIONS = 2
-        self.fixed_head = False
-        self.curr_head_duty = self.HEAD_START_DUTY
-        self.stop_flaps = False
-
-        if GPIO is not None:
-            GPIO.setup(head_pin, GPIO.OUT)
-            GPIO.setup(right_pin, GPIO.OUT)
-            GPIO.setup(left_pin, GPIO.OUT)
-
-            self.servo_head = GPIO.PWM(head_pin, self.PWM_HZ)
-            self.servo_right = GPIO.PWM(right_pin, self.PWM_HZ)
-            self.servo_left = GPIO.PWM(left_pin, self.PWM_HZ)
-
-            self.servo_head.start(self.SERVO_RESET)
-            self.servo_right.start(self.SERVO_RESET)
-            self.servo_left.start(self.SERVO_RESET)
-
-            self.head_position = self.DEGREE_CENTER
-            self.set_head_degree(self.DEGREE_CENTER)
-
-            # this value will be added on every rotation
-            self.head_direction = self.DEGREE_PER_DUTY
-
-    def get_sleep_time(self, old_duty: float, new_duty: float) -> float:
-        duty_diff = abs(new_duty - old_duty)
-        expected_time = self.REACTION_TIME + duty_diff * self.PER_DUTY_TIME
-        wait_time = max(self.MIN_MOVE_THRESHOLD, expected_time)
-        return wait_time
-
-    @_run_if_gpio
-    def degree_to_duty(self, degree: int) -> float:
-        return self.MIN_DUTY + ((degree - self.MIN_DEGREE) / self.DEGREE_PER_DUTY)
-
-    @_run_if_gpio
-    def clean_up(self):
-        self.servo_head.stop()
-        self.servo_right.stop()
-        self.servo_head.stop()
-        GPIO.cleanup()
-        sleep(0.5)
-
-    @_run_if_gpio
-    def set_head_degree(self, degree: Union[float, int]):
-        degree = int(round(degree))
-        if not self.MIN_DEGREE <= degree <= self.MAX_DEGREE:
-            print(f"got illegal motor degree = {degree}, skipping command")
-            return
-
-        if degree == self.head_position:
-            return
-
-        new_duty = self.degree_to_duty(degree)
-        self.servo_head.ChangeDutyCycle(new_duty)
-        old_duty = self.curr_head_duty
-        self.curr_head_duty = new_duty
-        wait_time = self.get_sleep_time(old_duty, new_duty)
-        print(f"moving head from {old_duty} to {new_duty}, waiting {wait_time} seconds")
-        sleep(wait_time)
-
-        # if we don't start the head after moving it, it keeps moving
-        self.servo_head.start(self.SERVO_RESET)
-        self.head_position = degree
-
-    @_run_if_gpio
-    def rotate_head(self):
-        if self.fixed_head:
-            self.set_head_degree(self.head_position)
-
-        else:
-            new_position = int(round(self.head_position + self.head_direction))
-
-            if not (self.MIN_DEGREE <= new_position <= self.MAX_DEGREE):
-                # head reached min/max
-                self.head_direction = -self.head_direction
-                new_position += self.head_direction
-
-            self.set_head_degree(new_position)
-
-            sleep(self.TIME_BETWEEN_ROTATIONS)
-
-    @_run_if_gpio
-    def flap_wings(self, times=4, sleep_time=0.66):
-        print(f"flapping wings {times} times, with {sleep_time} seconds in between")
-        for _ in range(times):
-            self.servo_right.ChangeDutyCycle(2)
-            self.servo_left.ChangeDutyCycle(7)
-            sleep(sleep_time)
-            self.servo_right.ChangeDutyCycle(7)
-            self.servo_left.ChangeDutyCycle(2)
-            sleep(sleep_time)
-            if self.stop_flaps:
-                # a user stopped the command early
-                self.stop_flaps = False
-                self.servo_right.start(self.SERVO_RESET)
-                self.servo_left.start(self.SERVO_RESET)
-                break
-
-        self.servo_right.start(self.SERVO_RESET)
-        self.servo_left.start(self.SERVO_RESET)
-
-
-class BirdDetectionNetwork:
-    MODEL_DIR_NAME = "Sample_TFLite_model"
-    GRAPH_FILE_NAME = "detect.tflite"
-    LABELS_FILE_NAME = "labelmap.txt"
-
-    def __init__(self):
-        cwd_path = Path.cwd()
-
-        # path to .tflite file, and .txt file, which contain the model network and labels
-        self.path_to_model = cwd_path / self.MODEL_DIR_NAME / self.GRAPH_FILE_NAME
-        self.path_to_labels = cwd_path / self.MODEL_DIR_NAME / self.LABELS_FILE_NAME
-
-        self.labels = self.parse_labels()
-
-        # load the Tensorflow Lite model
-        self.interpreter = Interpreter(model_path=str(self.path_to_model))
-        self.interpreter.allocate_tensors()
-
-        # get model details
-        self.network_input = self.interpreter.get_input_details()
-        self.network_output = self.interpreter.get_output_details()
-        self.height = self.network_input[0]['shape'][1]
-        self.width = self.network_input[0]['shape'][2]
-
-        self.floating_model = (self.network_input[0]['dtype'] == np.float32)
-
-        self.input_mean = 127.5
-        self.input_std = 127.5
-
-        # thread input and output
-        self.input_frame = None
-        self.output_detection_results = None
-        self.is_busy = False
-
-    def parse_labels(self) -> List[str]:
-        # load the label map
-        with open(self.path_to_labels, 'r') as f:
-            labels = [line.strip() for line in f.readlines()]
-        # first label is '???', which has to be removed.
-        return labels[1:]
-
-    def transform_video_frame(self, frame_from_cam):
-        # acquire frame and resize to expected shape [1xHxWx3]
-        frame = frame_from_cam.copy()
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_resized = cv2.resize(frame_rgb, (self.width, self.height))
-        input_data = np.expand_dims(frame_resized, axis=0)
-        # normalize pixel values if using a floating model (i.e. if model is non-quantized)
-        if self.floating_model:
-            input_data = (np.float32(input_data) - self.input_mean) / self.input_std
-        return frame, input_data
-
-    def run_image_through_network(self, input_data):
-        """
-        note: tensorflow_lite is optimized for ARM! super slow on windows.
-        """
-        # perform the actual detection by running the model with the image as input
-        self.is_busy = True
-        self.interpreter.set_tensor(self.network_input[0]['index'], input_data)
-        self.interpreter.invoke()
-        self.output_detection_results = self.get_last_detection_results()
-        self.is_busy = False
-
-    def get_last_detection_results(self):
-        boxes = self.interpreter.get_tensor(self.network_output[0]['index'])[0]
-        classes = self.interpreter.get_tensor(self.network_output[1]['index'])[0]
-        scores = self.interpreter.get_tensor(self.network_output[2]['index'])[0]
-        return boxes, classes, scores
-
-    def get_label(self, label_id):
-        return self.labels[int(label_id)]
-
-
-class FirebaseManager:
-    pass
-
 
 class BigScaryOwl:
     # detections
     MIN_BIRD_CONFIDENCE = 0.4
     BIRD_LABEL = "bird"
-    MIN_SEC_BETWEEN_DETECTIONS =5 
+    MIN_SEC_BETWEEN_DETECTIONS = 5
     MIN_SEC_BETWEEN_TESTING = 20
 
     # firebase
@@ -468,7 +152,8 @@ class BigScaryOwl:
                 self.settings_thread = Thread(target=self.check_settings_changed)
                 self.settings_thread.start()
 
-            if self.is_thread_available(self.rotate_thread):
+            if (self.is_thread_available(self.rotate_thread) and
+                    self.is_thread_available(self.flap_wings_thread)):
                 self.rotate_thread = Thread(target=self.servo_motors.rotate_head)
                 self.rotate_thread.start()
 
@@ -670,7 +355,7 @@ class BigScaryOwl:
 
     def _run_command(self, command_type: str):
         if command_type == "Trigger Alarm":
-            self._play_sound_action()
+            self._play_sound_action(sound_file_name=self.mp3.random_sound())
             self._flap_wings_action()
         elif command_type == "Stop Alarm":
             self.mp3.stop_music()
