@@ -370,7 +370,7 @@ class BigScaryOwl:
         frame_image = Image.fromarray(frame_rgb)
         full_image_name = f"{timestamp}_{confidence}.jpg"
         full_blob_path = f"{self.DEVICE_ID}/{full_image_name}"
-        full_image_path = str(Path("images") / full_image_name)
+        full_image_path = str(self.CWD / "images" / full_image_name)
 
         self.last_image_uploaded_url = None
         if self.is_thread_available(self.upload_image_thread):
