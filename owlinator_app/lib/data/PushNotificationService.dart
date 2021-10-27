@@ -47,6 +47,7 @@ class PushNotificationService {
             'body: ${notification.body}\n'
             'imageUrl: ${notification.imageUrl}');
 
+
         showSimpleNotification(
             Container(
                 child: Row(

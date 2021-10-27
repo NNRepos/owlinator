@@ -1,4 +1,5 @@
 import 'package:Owlinator/data/OwlSettings.dart';
+import 'package:Owlinator/data/OwlSettingsDao.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:settings_ui/settings_ui.dart';
@@ -24,6 +25,7 @@ class OwlPage extends StatefulWidget {
 class _OwlPageState extends State<OwlPage> {
   _OwlPageState(this.userData) {
     commandDao = CommandDao(userData);
+    settingsDao = OwlSettingsDao();
   }
 
   @override
@@ -34,6 +36,7 @@ class _OwlPageState extends State<OwlPage> {
 
   late Future<List<Map<String, dynamic>>> imageUrls;
   late UserData userData;
+  late OwlSettingsDao settingsDao;
   List<String> commands = [
     "Trigger Alarm",
     "Stop Alarm",
@@ -52,7 +55,7 @@ class _OwlPageState extends State<OwlPage> {
       DetectionTab(),
       SettingsTab()
     ];
-    getSettingsQuery(widget.device.id).then((result) {
+    settingsDao.getSettingsQuery(widget.device.id).then((result) {
       setState(() {
         if (this.mounted) {
           settings = result!;
@@ -63,12 +66,21 @@ class _OwlPageState extends State<OwlPage> {
     deviceName = widget.device.name;
     return Scaffold(
       appBar: AppBar(
-        title: Text(deviceName + [" Controls", " Detections", " Settings"][_selectedIndex]),
+        title: Text(deviceName +
+            [" Controls", " Detections", " Settings"][_selectedIndex]),
       ),
-      body: _widgetOptions.elementAt(_selectedIndex),
+      body:  RefreshIndicator(
+      onRefresh: updateDetections,
+      child: _widgetOptions.elementAt(_selectedIndex)),
       bottomNavigationBar: buildBottomNavigationBar(),
     );
   }
+
+ Future<void> updateDetections() async {
+   setState(() {
+     imageUrls = _getImageUrls();
+   });
+ }
 
   BottomNavigationBar buildBottomNavigationBar() {
     return BottomNavigationBar(
@@ -134,26 +146,44 @@ class _OwlPageState extends State<OwlPage> {
                   )));
         }).toList(),
       ),
-      Container(
-          child: Align(
-            child: Text("Action History",
-                style: TextStyle(fontSize: 20, color: Colors.grey)),
-            alignment: Alignment.centerLeft,
-          ),
-          padding: const EdgeInsets.only(left: 20, bottom: 5)),
+      Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+        Container(
+            child: Align(
+              child: Text("Actions",
+                  style: TextStyle(fontSize: 20, color: Colors.grey)),
+              alignment: Alignment.centerLeft,
+            ),
+            padding: const EdgeInsets.only(left: 20, bottom: 5)),
+        Container(
+            child: Align(
+              child: Text("Detections",
+                  style: TextStyle(fontSize: 20, color: Colors.grey)),
+              alignment: Alignment.centerLeft,
+            ),
+            padding: const EdgeInsets.only(left: 20, bottom: 5))
+      ]),
       Padding(
         padding: EdgeInsets.symmetric(horizontal: 10.0),
         child:
             Container(height: 1.0, width: double.infinity, color: Colors.grey),
       ),
-      commandDao.getCommandList(widget.device),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+        commandDao.getCommandList(widget.device),
+        commandDao.getDetectionList(widget.device)
+      ])
     ]);
   }
 
   Widget DetectionTab() {
-    Widget noImagesWidget = Center(child: Text("There are no detections", style: TextStyle(fontSize: 30)));
-    Widget errorWidget =
-        Center(child: Text("There was an error while retrieving detections", style: TextStyle(fontSize: 30)));
+    Widget noImagesWidget = Center(
+        child: Text("There are no detections", style: TextStyle(fontSize: 30)));
+    Widget errorWidget = Center(
+        child: Text("There was an error while retrieving detections",
+            style: TextStyle(fontSize: 30)));
     return FutureBuilder<List<Map<String, dynamic>>>(
         future: imageUrls,
         builder: (BuildContext context,
@@ -175,17 +205,16 @@ class _OwlPageState extends State<OwlPage> {
                       itemCount: snapshot.data!.length,
                       itemBuilder: (BuildContext context, int index) {
                         return Container(
-
                           child: Column(children: [
                             Container(
-                                padding: const EdgeInsets.fromLTRB(0, 0, 0, 10),
+                                padding: const EdgeInsets.fromLTRB(5, 0, 5, 10),
                                 width: 200.0,
-                                height: 165.0,
-                                child:
-                                    Image.network(snapshot.data![index]['url']! as String,
-                                        loadingBuilder: (BuildContext context,
-                                            Widget child,
-                                            ImageChunkEvent? loadingProgress) {
+                                height: 150.0,
+                                child: Image.network(
+                                    snapshot.data![index]['url']! as String,
+                                    loadingBuilder: (BuildContext context,
+                                        Widget child,
+                                        ImageChunkEvent? loadingProgress) {
                                   if (loadingProgress == null) return child;
                                   return Center(
                                     child: CircularProgressIndicator(
@@ -200,23 +229,21 @@ class _OwlPageState extends State<OwlPage> {
                                     ),
                                   );
                                 },
-                                        fit: BoxFit.cover,
-                                        width: 200.0,
-                                        height: 165.0)),
+                                    fit: BoxFit.scaleDown,
+                                    width: 200.0,
+                                    height: 150.0)),
                             Row(
-
                               children: [
-                                Text(
-                                    snapshot.data![index]['date']! as String,
+                                Text(snapshot.data![index]['date']! as String,
                                     style: TextStyle(fontSize: 10)),
-                                Text("Confidence: ${(snapshot.data![index]['confidence']! as double) * 100}%  ",
+                                Text(
+                                    "Confidence: ${(snapshot.data![index]['confidence']! as double)}%  ",
                                     style: TextStyle(fontSize: 10))
                               ],
                               crossAxisAlignment: CrossAxisAlignment.end,
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             )
                           ]),
-
                         );
                       });
             } else {
@@ -235,22 +262,21 @@ class _OwlPageState extends State<OwlPage> {
     allImages.items.forEach((firebase_storage.Reference ref) async {
       String url = await ref.getDownloadURL();
       List<String> decomp = ref.name.split("_");
-      List<int> dateParts = decomp[0]
-          .split("-")
-          .map((e) => int.parse(e))
-          .toList();
-      DateTime date = DateTime(
-          dateParts[0],
-          dateParts[1],
-          dateParts[2],
-          dateParts[3],
-          dateParts[4],
-          dateParts[5]);
+      List<int> dateParts =
+          decomp[0].split("-").map((e) => int.parse(e)).toList();
+      DateTime date = DateTime(dateParts[0], dateParts[1], dateParts[2],
+          dateParts[3], dateParts[4], dateParts[5]);
       var regex = RegExp(r'\d*.?\d{1,2}');
-      double confidence = double.parse(
-          regex.firstMatch(decomp[1])!.group(0)!);
-      urls.add(<String, dynamic>{'url': url, 'confidence': confidence, 'date': " ${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute}", 'Date': date});
-      urls.sort((a,b) => -(a['Date'] as DateTime).compareTo((b['Date'] as DateTime)));
+      double confidence = double.parse(regex.firstMatch(decomp[1])!.group(0)!);
+      urls.add(<String, dynamic>{
+        'url': url,
+        'confidence': confidence,
+        'date':
+            " ${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute}",
+        'Date': date
+      });
+      urls.sort((a, b) =>
+          -(a['Date'] as DateTime).compareTo((b['Date'] as DateTime)));
     });
 
     return urls;
@@ -281,7 +307,7 @@ class _OwlPageState extends State<OwlPage> {
               setState(() {
                 if (this.mounted) {
                   settings.mute = value;
-                  updateSettings(settings);
+                  settingsDao.updateSettings(settings);
                 }
               });
             },
@@ -298,11 +324,11 @@ class _OwlPageState extends State<OwlPage> {
           ),
           Container(
               decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Colors.white12,
                   border: Border(
                       bottom: BorderSide(width: .5, color: Colors.grey))),
               child: Slider(
-                  value: settings.volume,
+                  value: settings.volume.toDouble(),
                   min: 0,
                   max: 100,
                   divisions: 100,
@@ -311,19 +337,19 @@ class _OwlPageState extends State<OwlPage> {
                       : (double value) {
                           setState(() {
                             if (this.mounted) {
-                              settings.volume = value;
-                              updateSettings(settings);
+                              settings.volume = value.toInt();
+                              settingsDao.updateSettings(settings);
                             }
                           });
                         })),
           Container(
               decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Colors.white12,
                   border: Border(
                       bottom: BorderSide(width: .5, color: Colors.grey))),
               child: SettingsTile.switchTile(
-                title: 'Fixed Head',
-                subtitle: "Fix head to specified angle",
+                title: 'Fixed Body',
+                subtitle: "Fix body to specified angle",
                 leading: Icon(settings.fixedHead == true
                     ? Icons.gps_fixed
                     : Icons.rotate_left),
@@ -331,7 +357,7 @@ class _OwlPageState extends State<OwlPage> {
                   setState(() {
                     if (this.mounted) {
                       settings.fixedHead = value;
-                      updateSettings(settings);
+                      settingsDao.updateSettings(settings);
                     }
                   });
                 },
@@ -344,11 +370,11 @@ class _OwlPageState extends State<OwlPage> {
           ),
           Container(
               decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Colors.white12,
                   border: Border(
                       bottom: BorderSide(width: .5, color: Colors.grey))),
               child: Slider(
-                  value: settings.angle,
+                  value: settings.angle.toDouble(),
                   min: 0,
                   max: 180,
                   divisions: 180,
@@ -357,8 +383,8 @@ class _OwlPageState extends State<OwlPage> {
                       : (double value) {
                           setState(() {
                             if (this.mounted) {
-                              settings.angle = value;
-                              updateSettings(settings);
+                              settings.angle = value.toInt();
+                              settingsDao.updateSettings(settings);
                             }
                           });
                         })),
@@ -369,7 +395,7 @@ class _OwlPageState extends State<OwlPage> {
             switchValue: settings.notify,
             onToggle: (value) {
               settings.notify = value;
-              updateSettings(settings);
+              settingsDao.updateSettings(settings);
             },
           ),
         ])),
@@ -453,7 +479,7 @@ class _OwlPageState extends State<OwlPage> {
                           settings.device.name = newName;
                         }
                       });
-                      updateSettings(settings);
+                      settingsDao.updateSettings(settings);
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                           content: Text("Changed name to " + newName)));
                     }

@@ -1,37 +1,32 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'OwlSettings.dart';
 
 class OwlSettingsDao {
+
+
+
   void setSettings(OwlSettings settings) {
-    FirebaseFirestore.instance
-        .collection("Owls")
-        .doc(settings.device.id)
-        .set(settings.toJson());
+    DatabaseReference _owlSerttingsRef = FirebaseDatabase.instance.reference().child('owls').child(settings.device.id);
+    _owlSerttingsRef.set(settings.toJson());
   }
 
   void updateSettings(OwlSettings settings) {
-    FirebaseFirestore.instance
-        .collection("Owls")
-        .doc(settings.device.id)
-        .update(settings.toJson());
+    DatabaseReference _owlSerttingsRef = FirebaseDatabase.instance.reference().child('owls').child(settings.device.id);
+    _owlSerttingsRef.update(settings.toJson());
   }
 
   Future<OwlSettings?> getSettingsQuery(String deviceId) async {
     OwlSettings? settings = null;
-    await FirebaseFirestore.instance
-        .collection("Owls")
-        .doc(deviceId)
-        .get()
-        .then<dynamic>((DocumentSnapshot<Object?> snapshot) {
-      settings = OwlSettings.fromJson(snapshot.data() as Map<String, dynamic>);
-    });
+    DatabaseReference _owlSerttingsRef = FirebaseDatabase.instance.reference().child('owls').child(deviceId);
+    var snapshot = await _owlSerttingsRef.get();
+    settings = OwlSettings.fromJson(snapshot.value as Map<dynamic, dynamic>);
     return settings;
   }
 
- Future<List<String>> getAllOwlIds() async {
-    final QuerySnapshot<Map<String, dynamic>> result = await FirebaseFirestore.instance
-        .collection("Owls")
-        .get(GetOptions(source: Source.server));
-    return result.docs.map((e) => e.id).toList();
+ Future<List<int>> getAllOwlIds() async {
+   DatabaseReference _owlSerttingsRef = FirebaseDatabase.instance.reference().child('owls');
+    var result = await _owlSerttingsRef.get();
+    var intList = result.value == null ? List<int>.empty() : ((result.value as Map< Object?,  Object?>).keys).map((e)=>int.parse(e as String)).toList();
+    return intList;
   }
 }
