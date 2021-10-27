@@ -29,6 +29,8 @@ if USE_NETWORK:
 
 
 class BigScaryOwl:
+    CWD = Path(__file__).parent
+
     # detections
     MIN_BIRD_CONFIDENCE = 0.4
     BIRD_LABEL = "bird"
@@ -36,19 +38,19 @@ class BigScaryOwl:
     MIN_SEC_BETWEEN_TESTING = 20
 
     # firebase
-    DEVICE_ID_FILEPATH = Path("device_id.txt")
+    DEVICE_ID_FILEPATH = CWD / "device_id.txt"
     if not DEVICE_ID_FILEPATH.is_file():
         raise IOError(f"{DEVICE_ID_FILEPATH} was not found")
 
     DEVICE_ID = int(DEVICE_ID_FILEPATH.read_text())
-    FIREBASE_KEY_FILE_NAME = "firebase_key.json"
+    FIREBASE_KEY_FILE_PATH = CWD / "firebase_key.json"
     STORAGE_BUCKET_NAME = "taken-images"
     DEFAULT_DB_URLS = {"databaseURL": "https://iot-project-f75da-default-rtdb.firebaseio.com/",
                        "storageBucket": STORAGE_BUCKET_NAME}
 
     # notifications
-    HEADERS_FILE_PATH = Path("notification_header.json")
-    PAYLOAD_FILE_PATH = Path("notification_payload.json")
+    HEADERS_FILE_PATH = CWD / "notification_header.json"
+    PAYLOAD_FILE_PATH = CWD / "notification_payload.json"
 
     def __init__(self):
         self.bird_detection_scores: List = []
@@ -89,7 +91,7 @@ class BigScaryOwl:
         self.videostream = VideoStream(resolution=(self.im_width, self.im_height)).start()
 
         # initalize firebase app
-        cred = credentials.Certificate(self.FIREBASE_KEY_FILE_NAME)
+        cred = credentials.Certificate(self.FIREBASE_KEY_FILE_PATH)
         firebase_admin.initialize_app(cred, self.DEFAULT_DB_URLS)
 
         self.settings_db = db.reference(f"/owls/{self.DEVICE_ID}/settings")

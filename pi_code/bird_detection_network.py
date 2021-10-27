@@ -12,7 +12,7 @@ class BirdDetectionNetwork:
     LABELS_FILE_NAME = "labelmap.txt"
 
     def __init__(self):
-        cwd_path = Path.cwd()
+        cwd_path = Path(__file__).parent
 
         # path to .tflite file, and .txt file, which contain the model network and labels
         self.path_to_model = cwd_path / self.MODEL_DIR_NAME / self.GRAPH_FILE_NAME
