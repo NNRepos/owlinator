@@ -3,7 +3,15 @@ from typing import List
 
 import cv2
 import numpy as np
-from tensorflow.lite.python.interpreter import Interpreter
+
+USE_NETWORK = True
+
+if USE_NETWORK:
+    try:
+        print("setting up tensorflow, this takes ~5 seconds...")
+        from tflite_runtime.interpreter import Interpreter
+    except ImportError:
+        from tensorflow.lite.python.interpreter import Interpreter
 
 
 class BirdDetectionNetwork:

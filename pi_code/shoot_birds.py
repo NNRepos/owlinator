@@ -13,19 +13,10 @@ import requests
 from PIL import Image
 from firebase_admin import credentials, db, storage
 
-from pi_code.bird_detection_network import BirdDetectionNetwork
+from pi_code.bird_detection_network import BirdDetectionNetwork, USE_NETWORK
 from pi_code.servo_controller import ServoController, GPIO
 from pi_code.sound_player import SoundPlayer
 from pi_code.video_stream import VideoStream
-
-USE_NETWORK = True
-
-if USE_NETWORK:
-    try:
-        print("setting up tensorflow, this takes ~5 seconds...")
-        from tflite_runtime.interpreter import Interpreter
-    except ImportError:
-        from tensorflow.lite.python.interpreter import Interpreter
 
 
 class BigScaryOwl:
