@@ -1,3 +1,4 @@
+# TODO@niv: /sys/class/thermal/thermal_zone0/temp
 import argparse
 import json
 import random
@@ -17,7 +18,7 @@ from firebase_admin import credentials, db, storage
 from pygame import mixer, event
 
 USE_NETWORK = True
-USE_MOTORS = True
+USE_MOTORS = True 
 
 if USE_NETWORK:
     try:
@@ -213,7 +214,6 @@ class ServoController:
             return
 
         if degree == self.head_position:
-            print("head is already at the required angle")
             return
 
         new_duty = self.degree_to_duty(degree)
