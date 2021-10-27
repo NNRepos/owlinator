@@ -18,7 +18,7 @@ from firebase_admin import credentials, db, storage
 from pygame import mixer, event
 
 USE_NETWORK = True
-USE_MOTORS = True 
+USE_MOTORS = True
 
 if USE_NETWORK:
     try:
@@ -32,6 +32,7 @@ try:
         import shalhabi
 
     from RPi import GPIO
+
     GPIO.setmode(GPIO.BOARD)
 except ImportError:
     GPIO: Any = None
@@ -235,11 +236,13 @@ class ServoController:
 
         else:
             self.head_position += self.head_direction
-            self.set_head_degree(self.head_position)
 
-            # head reached min/max
             if not (self.MIN_DEGREE < self.head_position < self.MAX_DEGREE):
+                # head reached min/max
                 self.head_direction = -self.head_direction
+                self.head_position += self.head_direction
+
+            self.set_head_degree(self.head_position)
 
             sleep(self.TIME_BETWEEN_ROTATIONS)
 
