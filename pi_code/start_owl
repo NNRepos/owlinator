@@ -1,0 +1,3 @@
+cd /home/pi/Desktop/owlinator
+source ./pi_code/tflite1-env/bin/activate
+python -m pi_code.shoot_birds --frame=0

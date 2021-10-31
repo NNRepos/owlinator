@@ -23,7 +23,7 @@ class CommandWidget extends StatelessWidget {
           padding: EdgeInsets.only(left: 15, top: 10),
           onPressed: null,
           child:  Align(
-            child: Text(message),
+            child: Text(message, style: TextStyle(fontSize: 12)),
             alignment: Alignment.centerLeft,
           ),
         )),
@@ -31,7 +31,7 @@ class CommandWidget extends StatelessWidget {
             alignment: Alignment.bottomRight,
             child: Text(
               DateFormat('yyyy-MM-dd, kk:mma').format(date).toString(),
-              style: TextStyle(color: Colors.grey, fontSize: 10),
+              style: TextStyle(color: Colors.grey, fontSize: 9),
             )),
       ]),
     );

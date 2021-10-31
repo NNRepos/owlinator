@@ -1,5 +1,6 @@
-opencv-python
+pyparsing==2.4.7
 firebase-admin
 numpy
 pygame
 Pillow
+RPi.GPIO

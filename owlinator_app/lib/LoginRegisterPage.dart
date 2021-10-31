@@ -1,5 +1,5 @@
+import 'package:Owlinator/data/UserData.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'Authentication.dart';
@@ -23,7 +23,6 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
   String _password = '';
   String _firstName = '';
   String _lastName = '';
-  FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   //methods
   bool validateAndSave() {
@@ -49,14 +48,8 @@ class _LoginRegisterPageState extends State<LoginRegisterPage> {
           EasyLoading.show(status: 'Loading...');
           String userId = await widget.auth.signUp(_email, _password);
           EasyLoading.dismiss();
-          final Map<String, String> userData = {
-            'firstName': _firstName,
-            'lastName': _lastName,
-            'email': _email,
-            'uid': userId,
-            'notificationToken': widget.token ?? ''
-          };
-          await _firestore.collection('UserData').doc(userId).set(userData);
+          final UserData userData = UserData(_firstName, _lastName, userId, _email, List<Device>.empty(), widget.token ?? '');
+          UserData.createUserData(userData);
           print("userId: " + userId + " sign up");
         }
 

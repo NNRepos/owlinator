@@ -5,14 +5,16 @@ import 'package:flutter/cupertino.dart';
 
 import 'OwlPage.dart';
 import 'package:flutter/material.dart';
-import 'data/CommandDao.dart';
 import 'data/OwlSettings.dart';
 import 'data/UserData.dart';
 import 'data/OwlSettingsDao.dart';
 
 class HomePage extends StatefulWidget {
   HomePage(
-      {required this.auth, required this.firestore, required this.onSignedOut, required this.token});
+      {required this.auth,
+      required this.firestore,
+      required this.onSignedOut,
+      required this.token});
   final AuthImplementation auth;
   final VoidCallback onSignedOut;
   final FirebaseFirestore firestore;
@@ -44,7 +46,6 @@ class _HomePageState extends State<HomePage> {
     _updateDeviceList();
     bool noDevices = _devices.length == 0;
 
-
     List<Widget> _widgetOptions = <Widget>[
       ListView.builder(
           itemCount: noDevices ? 1 : _devices.length,
@@ -54,10 +55,11 @@ class _HomePageState extends State<HomePage> {
                 key: Key(noDevices ? "-1" : item!.id),
                 onDismissed: (direction) {
                   if (!noDevices) {
-                    if(this.mounted) setState(() {
-                      _removeDevice(item!);
-                      _updateDeviceList();
-                    });
+                    if (this.mounted)
+                      setState(() {
+                        _removeDevice(item!);
+                        _updateDeviceList();
+                      });
                     ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text(item!.name + ' was deleted')));
                   }
@@ -97,8 +99,7 @@ class _HomePageState extends State<HomePage> {
                         shadowColor: Colors.grey,
                         child: ListTile(
                           leading: ImageIcon(AssetImage('assets/logo.png'),
-                              size: 40,
-                          color: Colors.red),
+                              size: 40, color: Colors.red),
                           title: Text(item!.name),
                           subtitle: Text('ID: ' + item.id),
                           onTap: () {
@@ -106,7 +107,10 @@ class _HomePageState extends State<HomePage> {
                                 context,
                                 MaterialPageRoute<OwlPage>(
                                     builder: (context) => OwlPage(
-                                        device: item, userData: _userData, firestore: widget.firestore,)));
+                                          device: item,
+                                          userData: _userData,
+                                          firestore: widget.firestore,
+                                        )));
                           },
                         )));
           }),
@@ -137,15 +141,17 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: buildAppBar(),
       body: RefreshIndicator(
-      onRefresh: _updateDeviceList,
-      child:Center(child: _widgetOptions.elementAt(_selectedIndex))),
+          onRefresh: _updateDeviceList,
+          child: Center(child: _widgetOptions.elementAt(_selectedIndex))),
       bottomNavigationBar: buildBottomNavigationBar(),
-      floatingActionButton: _selectedIndex == 1 ? null : FloatingActionButton(
-          child: Icon(Icons.add),
-          onPressed: () {
-            _addDevice(context);
-            _updateDeviceList();
-          }),
+      floatingActionButton: _selectedIndex == 1
+          ? null
+          : FloatingActionButton(
+              child: Icon(Icons.add),
+              onPressed: () {
+                _addDevice(context);
+                _updateDeviceList();
+              }),
     );
   }
 
@@ -154,9 +160,10 @@ class _HomePageState extends State<HomePage> {
       type: BottomNavigationBarType.fixed,
       currentIndex: _selectedIndex,
       onTap: (value) {
-        if(this.mounted) setState(() {
-          _selectedIndex = value;
-        });
+        if (this.mounted)
+          setState(() {
+            _selectedIndex = value;
+          });
       },
       items: [
         BottomNavigationBarItem(
@@ -189,23 +196,18 @@ class _HomePageState extends State<HomePage> {
   Future<void> _updateDeviceList() async {
     User? user = await widget.auth.getCurrentUser();
     if (user != null) {
-      await widget.firestore
-          .collection('UserData')
-          .doc(user.uid)
-          .get()
-          .then<dynamic>((DocumentSnapshot<Map<String, dynamic>> snapshot) {
-        if (snapshot.exists) {
-          if(this.mounted) setState(() {
-            _userData = UserData.fromJson(snapshot.data()!);
-            _devices = _userData.devices;
-          });
-        }
+      var tempUser = await UserData.getUserData(user.uid);
+      setState( () {
+        _userData = tempUser;
+        _devices = _userData.devices;
       });
-      if(widget.token != null && (_userData.notificationToken != widget.token ||_userData.notificationToken== null)){
-        print("Updated notification Token");
-        await FirebaseFirestore.instance.collection('UserData').doc(_userData.uid).set(
-            <String, String>{'notificationToken': widget.token!}, SetOptions(merge: true));
-      }
+    }
+
+    if (widget.token != null &&
+        (_userData.notificationToken != widget.token ||
+            _userData.notificationToken == null)) {
+      print("Updated notification Token");
+      UserData.updateNotificationToken(_userData.uid, widget.token!);
     }
   }
 
@@ -213,20 +215,12 @@ class _HomePageState extends State<HomePage> {
   TextEditingController _deviceNameController = TextEditingController();
 
   void _removeDevice(Device item) async {
-    User? user = await widget.auth.getCurrentUser();
     _devices.remove(item);
-    await widget.firestore
-        .collection('UserData')
-        .doc(user!.uid)
-        .update(<String, List<Map<dynamic, dynamic>>>{'devices': _devices.map((e) => e.toJson()).toList()});
-    FirebaseFirestore.instance
-        .collection("Owls")
-        .doc(item.id).delete();
-    CommandDao(_userData).deleteDeviceCommands(item.id);
+    _userData.removeDevice(_devices, item);
   }
 
   void _addDevice(BuildContext context) async {
-    List<String> existingIds = await OwlSettingsDao().getAllOwlIds();
+    List<int> existingIds = await OwlSettingsDao().getAllOwlIds();
     return showDialog(
       context: context,
       builder: (context) {
@@ -265,26 +259,19 @@ class _HomePageState extends State<HomePage> {
                     newId.isNotEmpty &&
                     newName.isNotEmpty) {
                   if (existingIds.contains(newId)) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(
-                        SnackBar(content: Text("Cannot add Owl with id: $newId. Already connected to an account")));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(
+                            "Cannot add Owl with id: $newId. Already connected to an account")));
                   } else {
-                    User? user = await widget.auth.getCurrentUser();
                     List<Device> newDevices = [..._devices, newDevice];
                     newDevices.sort((a, b) {
                       return int.parse(a.id).compareTo(int.parse(b.id));
                     });
-                    await widget.firestore
-                        .collection('UserData')
-                        .doc(user!.uid)
-                        .update({
-                      'devices': newDevices.map((e) => e.toJson()).toList()
-                    });
-                    OwlSettings settings = OwlSettings.defaultSettings(
-                        newDevice, _userData.uid);
+                    _userData.addDevice(newDevices);
+                    OwlSettings settings =
+                        OwlSettings.defaultSettings(newDevice, _userData.uid);
                     OwlSettingsDao().setSettings(settings);
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(
+                    ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text(newName + ' added')));
                   }
                 }

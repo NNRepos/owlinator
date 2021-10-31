@@ -2,6 +2,8 @@
 sudo pip3 install virtualenv
 python3 -m venv tflite1-env
 source tflite1-env/bin/activate
-python3 -m pip install -r requirements.txt
 bash get_pi_requirements.sh
-python3 shoot_birds.py
+python -m pip install -r requirements.txt
+sudo apt install libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 libsdl2-2.0-0
+sudo raspi-config # interface->camera->yes
+python shoot_birds.py
