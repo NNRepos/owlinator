@@ -54,3 +54,4 @@ dkms.conf
 # jetbrains
 /.idea
 *geany*
+*__pycache__*

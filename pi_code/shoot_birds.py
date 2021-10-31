@@ -1,4 +1,5 @@
 # TODO@niv: /sys/class/thermal/thermal_zone0/temp
+# TODO@niv: maybe add external button with thread, which can stop/pause the owl
 import argparse
 import json
 from datetime import datetime
@@ -14,11 +15,12 @@ import requests
 from PIL import Image
 from firebase_admin import credentials, db, storage
 
-pygame.init()
 from pi_code.bird_detection_network import BirdDetectionNetwork, USE_NETWORK
 from pi_code.servo_controller import ServoController, GPIO
 from pi_code.sound_player import SoundPlayer
 from pi_code.video_stream import VideoStream
+
+pygame.init()
 
 GOOGLE_URL = "https://www.google.com/"
 GOOGLE_TIMEOUT = 5
